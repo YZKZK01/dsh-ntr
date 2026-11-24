@@ -182,7 +182,7 @@ const BACKGROUND_REPORT_FORM = 'notice'
  */
 
 /** The source kinds a proposed step keeps (see the module header). */
-const KEPT_SOURCES = new Set(['user', 'tool'])
+const KEPT_SOURCES = new Set(['user', 'tool', 'agent-message'])
 
 /**
  * Whether this message is the plugin's own idle-drain wake — and ONLY that.
@@ -482,7 +482,7 @@ export function apply(ctx, config) {
       // this is the explicit `strippedSources` override's safety net.
       const foreign = kept.length > 0 && !kept.some(message => {
         const kind = message?.source?.kind
-        return kind === undefined || kind === 'user' || kind === 'tool' || isBackgroundWake(message)
+        return kind === undefined || kind === 'user' || kind === 'tool' || kind === 'agent-message' || isBackgroundWake(message)
       })
       if (foreign) return { kind: 'reject' }
       return kept.length === decision.messages.length ? decision : { ...decision, messages: kept }
