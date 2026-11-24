@@ -6,6 +6,7 @@
 import type { AcpStore, UiState } from '../store.ts'
 import type { Translate } from '../acp-view.tsx'
 import type { AgentTestResult } from '../../protocol.ts'
+import { bilingualLiteral, bilingualPermissionOption } from '../permission-labels.ts'
 
 /**
  * The settings panel's permission-ledger rule.
@@ -122,6 +123,7 @@ export function agentTestHint(result: AgentTestResult, t: Translate): string | u
  */
 export function PermissionMirrorCard(props: { acp: AcpStore; ui: UiState }) {
   const { acp, ui } = props
+  const preferZh = acp.prefersZh()
   if (!permissionLedgerCard(ui).visible) return null
   return (
     <div className="dwa-card dwa-card-warn" style={{ marginBottom: 16 }}>
@@ -149,11 +151,11 @@ export function PermissionMirrorCard(props: { acp: AcpStore; ui: UiState }) {
               className="dwa-btn"
               onClick={() => { void acp.respondPermission(permission.requestId, option.optionId).catch(() => undefined) }}
             >
-              {option.name}
+              {bilingualPermissionOption(option.name, option.kind, preferZh)}
             </button>
           ))}
           <button type="button" className="dwa-btn dwa-btn-quiet" onClick={() => { void acp.respondPermission(permission.requestId).catch(() => undefined) }}>
-            {acp.label('取消', 'Cancel')}
+            {bilingualLiteral('取消', 'Cancel', preferZh)}
           </button>
         </div>
       ))}

@@ -25,6 +25,7 @@
 
 import { useEffect, useState } from 'react'
 import { ensureAcpStyle, useUi } from './acp-ui.tsx'
+import { bilingualLiteral, bilingualPermissionOption } from './permission-labels.ts'
 import {
   deadlineRemainingLabel,
   PERMISSION_DEADLINE_EXPIRED,
@@ -70,6 +71,7 @@ export function PermissionDock({ acp, sessionId }: PermissionDockProps) {
 
 function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission; now: number }) {
   const { acp, permission, now } = props
+  const preferZh = acp.prefersZh()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const remaining = deadlineRemainingLabel(permission.deadlineAt, now, permission.timeoutMode)
@@ -97,8 +99,8 @@ function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission
         {remaining !== undefined && (
           <span className={`ntr-permission-deadline${expired ? ' is-expired' : ''}`}>
             {expired
-              ? acp.label('已超时', 'expired')
-              : acp.label(`剩余 ${remaining}`, `${remaining} left`)}
+              ? bilingualLiteral('已超时', 'expired', preferZh)
+              : bilingualLiteral(`剩余 ${remaining}`, `${remaining} left`, preferZh)}
           </span>
         )}
       </div>
@@ -109,20 +111,20 @@ function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission
             type="button"
             className="ntr-permission-option"
             disabled={busy}
-            title={option.name}
+            title={bilingualPermissionOption(option.name, option.kind, preferZh)}
             onClick={() => { respond(option.optionId) }}
           >
-            {option.name}
+            {bilingualPermissionOption(option.name, option.kind, preferZh)}
           </button>
         ))}
         <button
           type="button"
           className="ntr-permission-cancel"
           disabled={busy}
-          title={acp.label('取消这次询问（不选择任何选项）', 'Cancel this ask without choosing an option')}
+          title={bilingualLiteral('取消这次询问（不选择任何选项）', 'Cancel this ask without choosing an option', preferZh)}
           onClick={() => { respond() }}
         >
-          {acp.label('取消', 'Cancel')}
+          {bilingualLiteral('取消', 'Cancel', preferZh)}
         </button>
       </div>
       {error !== undefined && (

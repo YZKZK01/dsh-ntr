@@ -159,7 +159,7 @@ to the config file"、"adopts a deadline the settings page writes while a sessio
 **对话 dock 卡**（`src/client/permission-dock.tsx` · `PermissionDock`；注册在 `src/client/index.tsx` 的 `conversation.input.dock`）：主入口，session-scoped，排在 composer 卡上方。槽位本身是整列宽，卡片套宿主 InputBar 的宽度公式（`--dsh-composer-side-clearance` + `--dsh-composer-card-max-width`），与输入框同宽居中。
 
 - **过滤**：`permissionsForSession(ui.permissions, dshSessionId)` 只留 `dshSessionId` 等于当前会话的询问。它没有 ACP 模式闸门——帧集合本身就是闸门：普通对话只有在真的有待答询问时才出现这张卡。
-- **选项原样**：按钮按 agent 的 `name` 与顺序渲染，`kind` 不显示（「Always Allow」也照原名出现）。另有一个**取消**键，不带 `optionId`；宿主把它转成 `cancelled`。
+- **选项原样 + 双语**：按钮按 agent 的 `name` 与顺序渲染，`kind` 仍然不当作可见 token；但 `kind`（`allow_always` / `allow_once` / `reject_once` / `reject_always`）用于补齐**缺失的语言半边**：`kind` 映射优先、缺 `kind` 按常见英文名兜底，agent 名原样保留并追加另一半（中文界面 `始终允许（Always Allow）`，英文界面 `Always Allow（始终允许）`）；agent 已本地化的名字（含 CJK）不再加注，未知选项原样显示。卡片自身文案（取消 / 倒计时 / 已超时）用 `bilingualLiteral` 同规则双语。另有一个**取消**键，不带 `optionId`；宿主把它转成 `cancelled`。
 - **键盘**：没有全局 Enter/Esc 处理器；这些是普通的可聚焦按钮，composer 拥有键盘。
 - **倒计时**：`deadlineRemainingLabel`（`src/client/store/permission.ts`）每秒 tick，显示 `12s` / `1m 30s` 这类读数；`wait` 或没有 `deadlineAt` 时不显示；过了期限显示「已超时」而不是负数（期限已经被宿主兑现，倒数会谎称它还在）。
 - **失败就地显示**：`respondPermission` 会写 store notice 并 rethrow；dock 在卡内用 `role="alert"` 显示错误，不把失败留在用户没打开的设置页。设置页侧吞掉 rethrow（notice 已经写了）。
