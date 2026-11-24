@@ -1,0 +1,308 @@
+/**
+ * The per-session live record, shared by the stream controller, the bridge and
+ * the services. Moved verbatim out of `turn-stream.ts` (which re-exports it) to
+ * keep that file inside the size ratchet; the shape is unchanged.
+ */
+import type { Transcript } from '../impl.ts'
+import type { AcpDelegatePolicy, SessionView } from '../protocol.ts'
+import type { DrainLedger } from './drain-record.ts'
+import type { BackgroundDispatch, BackgroundReport } from './types.ts'
+import type { TurnStreamController } from './turn-stream.ts'
+import type { SessionLifecycle, TurnSlot } from './session-lifecycle.ts'
+
+export interface LiveSession {
+  /** Host-minted id (stable across an agent restart; the ACP id is per-connection). */
+  sessionId: string
+  agentId: string
+  acpSessionId: string
+  cwd: string
+  title?: string
+  /**
+   * The adapter model id this session was last aligned to (`agentId` /
+   * `agentId@choice`). Recorded here so the browser can show "which model is
+   * this conversation on" from `session/chat-list` alone — the plugin's own
+   * binding, not a DSH model route.
+   */
+  modelId?: string
+  /** The model choice portion of {@link modelId}, when it carries one. */
+  choice?: string
+  /** The reasoning effort in force for this session, when one applies. */
+  reasoningEffort?: string
+  modes?: SessionView['modes']
+  configOptions?: unknown[]
+  availableCommands?: SessionView['availableCommands']
+  plan?: unknown[]
+  usage?: SessionView['usage']
+  /**
+   * The plugin's own measurable burst aggregate over this ACP session's turns
+   * (see `src/tps.ts`). Persisted with the chat-session record so the dock's
+   * rate survives a host restart; absent until a turn contributes a measurable
+   * burst (>= 1 inter-chunk gap).
+   */
+  burst?: SessionView['burst']
+  running: boolean
+  /**
+   * The HOST's prompt slot and the agent-side settle gate of the turn on air,
+   * as one value object. `promptHeld` is true from the moment a turn starts
+   * until the agent answers it (or the host aborts the turn, or the turn is
+   * discarded); the slot itself STAYS claimed after an abort until the agent
+   * acknowledges the cancel. Together they are what `claimTurn` arbitrates,
+   * NOT `running`.
+   *
+   * The three are deliberately different:
+   * - an ambient wait keeps `running` true (the background drain is still the
+   *   session's work, so nothing may release the process) while `promptHeld`
+   *   is already false (the agent answered; only the drain keeps talking);
+   * - an aborted turn clears `promptHeld` at once (our face of the turn ends)
+   *   but leaves the slot in place, so the next prompt still waits out
+   *   `turnSettleMs` for the agent instead of racing a concurrent prompt.
+   *
+   * Absent = the settle gate is open. `turnSeq` names the generation that owns
+   * the slot, so a superseded turn's late settler cannot clear a newer one's.
+   */
+  turnSlot?: TurnSlot
+  /**
+   * The explicit lifecycle of this record: `live` while it is registered on an
+   * open connection, `parked` once released and awaiting a `session/load`
+   * resume, `closed` once it is being destroyed. The single truth behind
+   * `SessionView.closed` / `SessionView.released`; `assertLifecycle` checks it
+   * against the released-record map at every lifecycle boundary.
+   */
+  lifecycle: SessionLifecycle
+  /**
+   * The agent-side session has history while the LOCAL buffer is empty: this
+   * record was restored from disk after a host restart (the replay has not
+   * landed yet), or a resume cleared the buffer ahead of the replay. The ACP
+   * view then says history replays on restore instead of "nothing yet". Set
+   * by `doResumeSession` (captured before the reset) and the restore path; the
+   * serializer ORs it with the live buffer length.
+   */
+  hasHistory?: boolean
+  /**
+   * A `session/load` is in flight: the ACP spec puts the agent's whole history
+   * replay BEFORE the response, so every update arriving in this window is
+   * replay, not live work. Set by `doResumeSession` around the request; the
+   * dispatch tracker skips it so a replayed historical dispatch cannot
+   * resurrect a finished worker as running.
+   */
+  loadingHistory?: boolean
+  /**
+   * When the agent last showed ANY sign of life on this session: an update, a
+   * permission ask (arrival or answer), or a turn start. The stall watchdog
+   * measures silence from here rather than from the prompt, which may
+   * legitimately be followed by a long tool run.
+   */
+  lastAgentActivityAt: number
+  /**
+   * Tool calls the agent announced and has not finished, by ACP `toolCallId`.
+   * A SET, not a flag: parallel calls finish independently, and one sibling's
+   * `completed` must not clear the long tool window while another is still
+   * running. Non-empty = the agent is working on its own clock.
+   */
+  activeToolCalls: Set<string>
+  /**
+   * Owning DSH chat session id, when the session was opened through the LLM
+   * adapter (`AcpLlmAdapter`). It is what the conversation's permission card
+   * filters on (`permission/request.dshSessionId`); sessions started over the
+   * `/acp` RPC have no chat session, so their asks stay on the settings panel.
+   */
+  dshSessionId?: string
+  /**
+   * Delegation-only session policy (`acp_delegate`'s three rungs); absent =
+   * use the bridge-level approval knobs. Never written for a chat session.
+   */
+  permissionPolicy?: AcpDelegatePolicy
+  /**
+   * True when this chat session runs on the ACP-mode agent preset, re-resolved
+   * every turn. It is a report for the browser surfaces (which conversation are
+   * we in), not a policy switch: an ACP agent decides its own permissions, so
+   * the host arbitrates nothing (see docs/acp-convergence.md §2.3).
+   */
+  acpMode?: boolean
+  /**
+   * This session's first turn wrote the conversation's agent lock just now
+   * (the conversation had none before). The lock is provisional until that
+   * turn produces a visible block: a first turn that delivers nothing — an
+   * error, a silent provider failure folded into a normal stop, or even a
+   * cancel — rolls the lock back and closes this session, so the user can
+   * choose another agent. Cleared as soon as the first turn settles.
+   */
+  provisionalLock?: boolean
+  /**
+   * Monotonic per-session counter, bumped at every turn start (both the
+   * `/acp` RPC path and the adapter's `streamPrompt`). Turn-scoped timers —
+   * the cancel fallback — capture it when armed and compare when they fire:
+   * a timer whose generation has moved on belongs to a turn that already
+   * ended, and must not force-finalize the LATER turn now on air.
+   */
+  turnSeq: number
+  /**
+   * The {@link turnSeq} of the turn `session/cancel` was last called for.
+   * A `cancelled` stopReason on a turn whose generation does not match is
+   * not the user's cancel: some agents answer the NEXT prompt with the
+   * PREVIOUS cancel while still cleaning up (the stale-cancel swallow), and
+   * that answer means the message was silently dropped.
+   */
+  cancelRequestedAtTurn?: number
+  /**
+   * The {@link turnSeq} of a turn the stall watchdog force-finalized while the
+   * agent still held its `session/prompt`. The agent is presumed wedged, so the
+   * NEXT prompt reclaims the process (`BridgeManager.prepareStalledSession`)
+   * instead of queueing behind a turn that may never answer. Cleared when the
+   * late response lands or when the reclaim replaces the process.
+   */
+  orphanPromptTurnSeq?: number
+  /**
+   * The {@link turnSeq} of a turn a reclaim (`prepareStalledSession`) ended by
+   * closing the connection while the agent still held its `session/prompt`.
+   * The close rejects that request, and the caller's catch would broadcast a
+   * second `turn/end` for a turn already finalized: this marker tells the
+   * late `then`/`catch` to drop the answer instead. Set by the reclaim, cleared
+   * when that answer lands, at every new turn start, and by a resume.
+   */
+  reclaimedTurnSeq?: number
+  /**
+   * The controller of the turn currently streaming through this session.
+   *
+   * Chat turns are ALSO indexed by chat id ({@link BridgeManager}'s
+   * `turnStreams`) because their continuation steps arrive as fresh
+   * `streamPrompt` calls that look the turn up by chat id. An EPHEMERAL turn
+   * (`options.sessionId === undefined`) has no chat id to index under, so this
+   * attachment is the only way the stall watchdog can find its controller —
+   * without it a silent ephemeral turn falls into the `/acp` branch, which
+   * leaves the driver's segment queue open instead of finishing it. Cleared by
+   * the controller's own `retire` when it still points at it.
+   */
+  turnController?: TurnStreamController
+  /**
+   * The agent's last rate-limit refusal on this session, and when it landed.
+   *
+   * CodeBuddy answers a rate-limited prompt with a RESOLVED response
+   * (`stopReason: 'refusal'`, the reason in the response `_meta`), so nothing
+   * in the turn itself says the conversation stopped for a quota the user can
+   * wait out or switch models for. The composer's dock card reads this through
+   * `snapshot()`; the `at` timestamp stays here and never reaches the view.
+   *
+   * BOTH prompt planes write it — the chat adapter's `streamPrompt` and the
+   * `/acp` RPC's `prompt` — because one LiveSession can be driven from either,
+   * and a banner that survives the answer that disproved it is a lie.
+   *
+   * TRANSIENT by design: the next non-limited response clears it, and so does
+   * every lifecycle boundary (`clearAmbientState`: close / release / resume /
+   * force reset). It is deliberately NOT part of `PersistedChatSession` — a
+   * quota from a previous host run says nothing about this one.
+   *
+   * `at` stamps when the refusal landed and nothing expires the record from
+   * it: the reset time the agent reports is prose inside `message`, and
+   * guessing a timestamp out of that would invent a policy the agent never
+   * stated. The record clears on EVIDENCE instead (the next answer that is not
+   * rate-limited, or a lifecycle boundary), which is also why an idle release
+   * bounds how long a stale banner can sit on a live session.
+   */
+  quotaRefusal?: { message: string; at: number }
+  /**
+   * The late step Antigravity's own transcript reported after the turn closed
+   * (see `docs/plan/archive/antigravity-late-output.md`): `text` is its content,
+   * `thought` its thinking, `at` the wake replay that committed the record.
+   *
+   * The agent replays that step on the NEXT prompt (it sends no update while
+   * no prompt is in flight), so `ReplayEchoGuard` swallows exactly this replay
+   * once, per kind. The record's lifetime is EVENT-BOUND — it dies at the next
+   * turn's close or a lifecycle boundary, never on a wall-clock window: the
+   * replay comes with the next prompt whenever the user sends it. Written only
+   * when `BridgeManager.streamPrompt` actually replays the pending report — a
+   * wake skipped by the background-report FIFO must NOT write it, or the
+   * replayed answer would be swallowed twice. Each key is consumed on its own;
+   * the record dies when both are gone. The `/acp` RPC prompt retires it at
+   * claim time too: that prompt consumes the flush on the raw face.
+   */
+  lateEcho?: { text?: string; thought?: string; at: number }
+  /**
+   * A late report handed to the chat plane that no step has replayed yet.
+   * `streamPrompt` matches its `report` against the report it is about to
+   * yield and converts it into {@link LiveSession.lateEcho}, whose `text` is
+   * the UNMARKED truncated prefix (`guard`): the echo guard's deduplication key
+   * must match the agent's replay, never our truncation marker. `thought` rides
+   * along untruncated — it is never delivered, only matched. Known narrow seam
+   * (accepted): an `/acp` prompt may consume the flush BEFORE the wake replays;
+   * the commit then arms the guard for exactly one chat turn (the next
+   * `closeTurn` retires it), and only a byte-identical answer could be eaten.
+   */
+  pendingLateEcho?: { guard: string; report: string; at: number; thought?: string }
+  /**
+   * The visible answer text of the turn that just closed, kept to recognise
+   * the agent writing the SAME answer late: a candidate equal to it is this
+   * turn's own text, not a new report.
+   */
+  lastTurnAnswerText?: string
+  /**
+   * `toolCallId`s seen in a COMPLETED turn (Antigravity only). The agent
+   * replays the previous turn's tool frames on the next prompt: a known id
+   * must not open a second card, and its replay must not re-open the stall
+   * watchdog's long tool window. Bounded (`KNOWN_TOOL_CALL_MAX`), oldest
+   * evicted first; `turnToolCalls` collects the current turn's ids and they
+   * rotate in here at `closeTurn`.
+   */
+  knownToolCalls?: Set<string>
+  /** `toolCallId`s seen in the turn currently on air (Antigravity only). */
+  turnToolCalls?: Set<string>
+  /**
+   * Stops this session's transcript watch (the late-output service's
+   * `disarm`). Set at arm time, called by `clearAmbientState` at every
+   * lifecycle boundary — the writer is the agent process, so a released
+   * session's transcript cannot grow and a watch must not outlive it.
+   */
+  stopLateWatch?: () => void
+  /**
+   * Stops this session's subagent transcript poll (the agy poll service's
+   * `disarm`). Set at arm time, called by `clearAmbientState` at every
+   * lifecycle boundary — the child transcripts' writer is the agent process,
+   * so a released session's poll must not outlive it, and a resume must never
+   * revive polling for dispatches that teardown already terminalized.
+   */
+  stopAgyPoll?: () => void
+  /**
+   * Detached workers this session dispatched that may still run after the
+   * turn that dispatched them CLOSED. Session-level on purpose: the worker's
+   * completion / drain frames arrive after that turn's controller retired,
+   * and the idle clock must see the pending work so a release cannot kill the
+   * agent out from under it.
+   */
+  backgroundDispatches?: Map<string, BackgroundDispatch>
+  /**
+   * Antigravity `invoke_subagent` dispatches (see `AgySubagentTracker`).
+   * Session-level for the same reason as {@link backgroundDispatches} — the
+   * creation result may land after the dispatching turn closed — but in a
+   * SEPARATE map: the CodeBuddy tracker must never read an agy row (its
+   * `completed` result means "child created", not "worker finished"), and the
+   * detached-worker hold must never see one (agy children are always
+   * off-turn). The idle clock counts them through its OWN agy branch of
+   * `hasPendingBackgroundWork`; teardown covers both maps alike.
+   */
+  agyDispatches?: Map<string, BackgroundDispatch>
+  /**
+   * Prose an IDLE background drain streamed while no turn controller observed
+   * it. With the default "settle at the prompt response" (docs/acp-convergence
+   * §派发即收口), CodeBuddy's unsolicited turn lands on a conversation nobody
+   * is driving: the text reaches the transcript, but the chat plane would stay
+   * silent until the person spoke again. This record lets the manager hand the
+   * report to the host as a wake-up message, which turns it into a REAL chat
+   * turn (`BridgeManager.deliverBackgroundReport`).
+   *
+   * ONE record per run: a frame of a DIFFERENT run (a drain that announced
+   * itself while the report waited) closes the old record out in place and
+   * opens a fresh one — two runs' prose never mix in one report, and each
+   * run's id is retired on its own delivery (`trackBackgroundDrainText`).
+   */
+  backgroundReport?: BackgroundReport
+  /**
+   * Every background drain this session has a trace of: one
+   * {@link DrainRecord} per request id plus the three bounded id rings that
+   * preserve the old containers' capacity and eviction order (stage 6 of
+   * `docs/plan/implicit-state-machines.md`). Created lazily by the first
+   * writer, like {@link backgroundDispatches}; a lifecycle boundary drops the
+   * whole ledger (`clearAmbientState`).
+   */
+  drains?: DrainLedger
+  transcript: Transcript
+}

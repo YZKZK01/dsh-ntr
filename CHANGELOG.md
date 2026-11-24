@@ -1,0 +1,605 @@
+# Changelog
+
+面向用户的版本改动记录，从 0.2.0 起维护。只记每一版留下的确定性净改动；被推翻、回退或只在开发过程中存在过的中间形态不记。条目与 GitHub Release 用同一套话，规则见 [AGENTS.md](./AGENTS.md) 约束 35。
+
+## [0.4.7] - 2026-11-18
+
+这一版集中修正 Antigravity 会话中回复混入回显内容与子代理失败静默的问题，并让输入区的长菜单可以搜索和滚动。
+
+### 新增
+
+- **client**：输入区的长菜单支持按名称、详情与标识搜索；条目在列表内滚动而不被截断，刷新目录与打开设置固定在列表上方，agent 菜单同样支持搜索。([58ae524](https://github.com/GDWhisper/dsh-ntr/commit/58ae524))
+
+### 改进
+
+- **acp**：未单独设置模型列表的 agent 默认展示全部已发布模型，新添加的 agent 首次打开模型菜单即可选用。([09e17ed](https://github.com/GDWhisper/dsh-ntr/commit/09e17ed))
+
+### 修复
+
+- **acp**：助手回复不再混入用户消息的回显内容。([129c175](https://github.com/GDWhisper/dsh-ntr/commit/129c175))
+- **acp**：上一轮的回答与思考不会在用户稍后发消息时重复出现。([04d172b](https://github.com/GDWhisper/dsh-ntr/commit/04d172b))
+- **acp**：Antigravity 后台子代理失败时给出错误提示，不再静默消失；子代理的工作过程与完成状态恢复跟踪。([d0a345a](https://github.com/GDWhisper/dsh-ntr/commit/d0a345a))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.6...v0.4.7
+
+---
+
+This release fixes echoes leaking into Antigravity conversations and silent subagent failures, and makes long composer menus searchable and scrollable.
+
+### Added
+
+- **client**: long composer menus are searchable by label, detail, and id; entries scroll inside the list instead of being truncated, the refresh and settings actions stay pinned above it, and the agent menu gets the same search box. ([58ae524](https://github.com/GDWhisper/dsh-ntr/commit/58ae524))
+
+### Improved
+
+- **acp**: agents without a model list of their own offer every published model by default, so a newly added agent's model menu works on first use. ([09e17ed](https://github.com/GDWhisper/dsh-ntr/commit/09e17ed))
+
+### Fixed
+
+- **acp**: the assistant reply no longer folds in the agent's user-message echo. ([129c175](https://github.com/GDWhisper/dsh-ntr/commit/129c175))
+- **acp**: the previous answer and its thinking no longer reappear when the user replies later. ([04d172b](https://github.com/GDWhisper/dsh-ntr/commit/04d172b))
+- **acp**: a failed Antigravity background subagent surfaces an error notice instead of disappearing silently, and its work and completion are tracked again. ([d0a345a](https://github.com/GDWhisper/dsh-ntr/commit/d0a345a))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.6...v0.4.7
+
+## [0.4.6] - 2026-11-17
+
+这一版让 NTR 会话里的 agent 可以读取本机 DSH 技能，并新增控制这个能力的开关。
+
+### 新增
+
+- **acp**：NTR 会话里的 agent 可以列出并读取本机的 DSH 技能；技能文档按需读取且有长度上限，读取过程只读、不改任何文件。([9ac6839](https://github.com/GDWhisper/dsh-ntr/commit/9ac6839))
+- **acp**：设置页新增技能发现的总开关，默认关闭；每个 agent 还可单独关闭，改动立即生效，不必重启进程。([75bae4a](https://github.com/GDWhisper/dsh-ntr/commit/75bae4a))
+
+### 改进
+
+- **client**：设置页左侧的 NTR 入口图标改为双环图标。([b9434d1](https://github.com/GDWhisper/dsh-ntr/commit/b9434d1))
+
+### 修复
+
+- **acp**：工具执行期间，宿主的「准备中」一行直接显示具体操作，不必等到工具结束。([9bad9a7](https://github.com/GDWhisper/dsh-ntr/commit/9bad9a7))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.5...v0.4.6
+
+---
+
+This release lets agents in NTR conversations read the DSH skills on this machine, behind a new switch that controls the capability.
+
+### Added
+
+- **acp**: agents in NTR conversations can list and read the DSH skills on this machine; skill documents are read on demand with a size cap, and reading never changes a file. ([9ac6839](https://github.com/GDWhisper/dsh-ntr/commit/9ac6839))
+- **acp**: the settings page gains a master switch for skill discovery, off by default; each agent can also opt out on its own, and a change applies without restarting the process. ([75bae4a](https://github.com/GDWhisper/dsh-ntr/commit/75bae4a))
+
+### Improved
+
+- **client**: the NTR entry in the settings nav uses a double-ring glyph. ([b9434d1](https://github.com/GDWhisper/dsh-ntr/commit/b9434d1))
+
+### Fixed
+
+- **acp**: while a tool runs, the host's preparing row shows the operation instead of waiting for the call to finish. ([9bad9a7](https://github.com/GDWhisper/dsh-ntr/commit/9bad9a7))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.5...v0.4.6
+
+## [0.4.5] - 2026-11-14
+
+这一版把 Antigravity 的子代理接入子智能体面板，并修正后台报告、上下文占用与思考档位显示中几处丢信息的问题。
+
+### 新增
+
+- **acp**：Antigravity 会话派出的子代理进入子智能体面板，运行状态随子会话进展更新。([9ab777c](https://github.com/GDWhisper/dsh-ntr/commit/9ab777c))
+- **acp**：点击 Antigravity 子代理条目可查看其子会话工作过程，内容只读。([f690001](https://github.com/GDWhisper/dsh-ntr/commit/f690001))
+- **acp**：思考档位按模型分别记录；切换到尚未观测的模型时，思考卡可单独获取该模型的档位。([19ec81f](https://github.com/GDWhisper/dsh-ntr/commit/19ec81f))
+
+### 修复
+
+- **acp**：Antigravity CLI 预设默认跳过工具权限请求，子代理不再卡在无人应答的授权上；已保存的 agent 保持原有启动参数。([6adeb3b](https://github.com/GDWhisper/dsh-ntr/commit/6adeb3b))
+- **acp**：Antigravity 回合后输出的等待改为按活动续期，长跑子代理的回答不再被固定时限截断；新增 `agyLateOutputMaxMs` 与 `agyLateOutputCeilingMs` 两个配置项。([e387103](https://github.com/GDWhisper/dsh-ntr/commit/e387103))
+- **acp**：多轮 Antigravity 子代理不再在启动数秒后被误判完成；打开运行中的子代理详情会重新读取最新内容。([85d1dfc](https://github.com/GDWhisper/dsh-ntr/commit/85d1dfc))
+- **save-gate**：设置在写入途中插件被销毁时按失败上报，不再误报已保存；此时也不再提供排队或强制保存。([269088d](https://github.com/GDWhisper/dsh-ntr/commit/269088d))
+- **skills-scan**：符号链接技能在链接本身无法读取时改用其记录的目标解析，不再被静默漏掉。([23bc581](https://github.com/GDWhisper/dsh-ntr/commit/23bc581))
+- **acp**：等待后台子代理期间，只有费用的用量更新不再清空上下文占用环。([7d8ef91](https://github.com/GDWhisper/dsh-ntr/commit/7d8ef91))
+- **acp**：同一用户请求的后续后台报告不再逐帧丢失，聊天会再次被唤醒接收完整回答。([00546de](https://github.com/GDWhisper/dsh-ntr/commit/00546de))
+- **acp**：配置选项缺少模型槽时保留各模型思考档位，其他模型不再显示「尚未连接」。([86d6c2e](https://github.com/GDWhisper/dsh-ntr/commit/86d6c2e))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.4...v0.4.5
+
+---
+
+This release brings Antigravity subagents into the subagent panel and fixes several places where background reports, context occupancy, and thought-level display lost information.
+
+### Added
+
+- **acp**: subagents dispatched by an Antigravity session show up in the subagent panel, and their state follows the child session's progress. ([9ab777c](https://github.com/GDWhisper/dsh-ntr/commit/9ab777c))
+- **acp**: opening an Antigravity subagent entry shows the child session's work as a read-only step view. ([f690001](https://github.com/GDWhisper/dsh-ntr/commit/f690001))
+- **acp**: thought levels are recorded per model; switching to a model that was never observed lets the thought card fetch that model's levels on demand. ([19ec81f](https://github.com/GDWhisper/dsh-ntr/commit/19ec81f))
+
+### Fixed
+
+- **acp**: the Antigravity CLI preset skips tool permission prompts by default, so subagents no longer hang on an approval nobody can answer; saved agents keep their existing launch arguments. ([6adeb3b](https://github.com/GDWhisper/dsh-ntr/commit/6adeb3b))
+- **acp**: Antigravity's post-turn output watch now renews on activity, so a long-running subagent's answer is no longer cut off by a fixed deadline; two new config keys, `agyLateOutputMaxMs` and `agyLateOutputCeilingMs`, tune the windows. ([e387103](https://github.com/GDWhisper/dsh-ntr/commit/e387103))
+- **acp**: a multi-turn Antigravity subagent is no longer marked completed seconds after it starts; opening the detail of a running child re-reads its latest content. ([85d1dfc](https://github.com/GDWhisper/dsh-ntr/commit/85d1dfc))
+- **save-gate**: a settings save whose plugin is disposed mid-write reports failure instead of claiming it was saved, and a disposed gate no longer offers queue or force options. ([269088d](https://github.com/GDWhisper/dsh-ntr/commit/269088d))
+- **skills-scan**: a symlinked skill whose link itself cannot be read now falls back to its recorded target instead of being dropped silently. ([23bc581](https://github.com/GDWhisper/dsh-ntr/commit/23bc581))
+- **acp**: while the chat waits for a background subagent, a cost-only usage tick no longer blanks the context occupancy ring. ([7d8ef91](https://github.com/GDWhisper/dsh-ntr/commit/7d8ef91))
+- **acp**: later background reports for the same user request are no longer dropped frame by frame; the chat wakes again to receive the full answer. ([00546de](https://github.com/GDWhisper/dsh-ntr/commit/00546de))
+- **acp**: a configOptions answer without a model slot keeps the per-model thought map instead of resetting every other model to "not connected yet". ([86d6c2e](https://github.com/GDWhisper/dsh-ntr/commit/86d6c2e))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.4...v0.4.5
+
+## [0.4.4] - 2026-11-11
+
+这一版把 Antigravity 回合结束后才完成的回答接回聊天，归档对话也会及时释放 agent 进程。
+
+### 新增
+
+- **acp**：Antigravity 会话在回合结束后完成的定时任务与子代理工作，其回答作为后台报告自动进入聊天；下一轮开头的重复回放会被吞掉，已完成的工具卡也不会重开。([a96131e](https://github.com/GDWhisper/dsh-ntr/commit/a96131e))
+- **acp**：插件配置新增 `agyLateOutput` 开关，可关闭 Antigravity 回合后输出的回收，默认开启。([1c9ae6c](https://github.com/GDWhisper/dsh-ntr/commit/1c9ae6c))
+
+### 改进
+
+- **acp**：在侧栏归档对话后，对应的 agent 进程随之释放；正在跑的回合先取消、结算后再挂起，需要时下一条消息照常恢复，不支持会话恢复的 agent 保持原样。([e55fe37](https://github.com/GDWhisper/dsh-ntr/commit/e55fe37))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.3...v0.4.4
+
+---
+
+This release brings Antigravity's post-turn answers back into the chat and frees agent processes promptly when conversations are archived.
+
+### Added
+
+- **acp**: in an Antigravity session, scheduled and sub-agent work that finishes after the turn ends arrives in the chat as a background report; the replayed copy at the start of the next prompt is swallowed, and no second tool card opens for a completed call. ([a96131e](https://github.com/GDWhisper/dsh-ntr/commit/a96131e))
+- **acp**: the plugin config accepts an `agyLateOutput` switch that turns off Antigravity's post-turn output recovery; it is on by default. ([1c9ae6c](https://github.com/GDWhisper/dsh-ntr/commit/1c9ae6c))
+
+### Improved
+
+- **acp**: archiving a conversation in the sidebar releases its agent process; a running turn is cancelled first and parked once it settles, the next message resumes as usual, and agents without session recovery stay untouched. ([e55fe37](https://github.com/GDWhisper/dsh-ntr/commit/e55fe37))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.3...v0.4.4
+
+## [0.4.3] - 2026-11-10
+
+这一版修正对话显示与会话恢复中几处容易误导人的提示。
+
+### 修复
+
+- **acp**：工具卡不再把正常调用显示成错误：首次使用时的「未知工具 / 已添加工具」成对提示消失，插件热重载后也不会整批报错。([b1437f1](https://github.com/GDWhisper/dsh-ntr/commit/b1437f1)) ([#12](https://github.com/GDWhisper/dsh-ntr/issues/12))
+- **acp**：宿主内部的辅助请求不再作为隐藏用户消息转给 agent，对话只转述你写的内容。([b1437f1](https://github.com/GDWhisper/dsh-ntr/commit/b1437f1))
+- **acp**：后台报告被长度上限截断后，运行结束时再送完整总结，后续内容不再丢失。([66e5a99](https://github.com/GDWhisper/dsh-ntr/commit/66e5a99))
+- **acp**：重启 DSH 后恢复 NTR 会话，已完成的后台子代理保持已完成，不再变回运行中；恢复后也不会多出一轮后台任务提示。([4d2ac9d](https://github.com/GDWhisper/dsh-ntr/commit/4d2ac9d))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.2...v0.4.3
+
+---
+
+This release fixes several misleading signals in conversation display and in session recovery.
+
+### Fixed
+
+- **acp**: tool cards no longer report a normal call as an error — the first-use "unknown tool" / "tool added" pair is gone, and a plugin hot reload no longer fails every card. ([b1437f1](https://github.com/GDWhisper/dsh-ntr/commit/b1437f1)) ([#12](https://github.com/GDWhisper/dsh-ntr/issues/12))
+- **acp**: host-internal auxiliary requests are no longer forwarded to the agent as a hidden user message; the conversation only carries what you write. ([b1437f1](https://github.com/GDWhisper/dsh-ntr/commit/b1437f1))
+- **acp**: a background report cut by the length limit delivers its full summary once the run settles, so the tail is no longer lost. ([66e5a99](https://github.com/GDWhisper/dsh-ntr/commit/66e5a99))
+- **acp**: resuming an NTR conversation after a host restart keeps finished background subagents finished instead of running again, and no background-task notice appears on resume. ([4d2ac9d](https://github.com/GDWhisper/dsh-ntr/commit/4d2ac9d))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.2...v0.4.3
+
+## [0.4.2] - 2026-11-09
+
+后台工作线程不再占用主对话，报告到达后进入聊天；工具卡在调用进行中提前显示命令；更新卡在安装前预览发布说明；新增 Antigravity CLI 预设。
+
+### 新增
+
+- **update**：设置页的更新卡在安装前预览目标版本的发布说明，按界面语言展示，并给出发布页链接。([d34bc25](https://github.com/GDWhisper/dsh-ntr/commit/d34bc25))
+- **acp**：添加 agent 页新增 Antigravity CLI 预设，启动命令为 `agy acp`。([3acfb6f](https://github.com/GDWhisper/dsh-ntr/commit/3acfb6f))
+
+### 改进
+
+- **acp**：工具调用还在运行时，工具卡就显示该次调用的真实命令。([cbf63bd](https://github.com/GDWhisper/dsh-ntr/commit/cbf63bd))
+- **acp**：派出的后台 worker 运行期间，主对话保持可用，本轮不再被它占用。([ae45e2d](https://github.com/GDWhisper/dsh-ntr/commit/ae45e2d))
+- **acp**：后台 worker 静默后，它的报告作为一条对话消息进入聊天。([70c0dd8](https://github.com/GDWhisper/dsh-ntr/commit/70c0dd8))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.1...v0.4.2
+
+---
+
+Detached workers no longer hold the chat, and their reports arrive in the chat; tool cards show the real command while the call runs; the update card previews release notes before installing; a new Antigravity CLI preset is available.
+
+### Added
+
+- **update**: the settings update card previews the target version's release notes before installing, in the interface language, with a release-page link. ([d34bc25](https://github.com/GDWhisper/dsh-ntr/commit/d34bc25))
+- **acp**: the add-agent page offers an Antigravity CLI preset, launched as `agy acp`. ([3acfb6f](https://github.com/GDWhisper/dsh-ntr/commit/3acfb6f))
+
+### Improved
+
+- **acp**: a running tool card shows the call's real command while the tool still runs. ([cbf63bd](https://github.com/GDWhisper/dsh-ntr/commit/cbf63bd))
+- **acp**: the main chat stays usable while a detached worker runs and no longer holds the turn. ([ae45e2d](https://github.com/GDWhisper/dsh-ntr/commit/ae45e2d))
+- **acp**: once a background worker goes quiet, its report arrives in the chat as a conversation message. ([70c0dd8](https://github.com/GDWhisper/dsh-ntr/commit/70c0dd8))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.1...v0.4.2
+
+## [0.4.1] - 2026-11-08
+
+NTR 会话标题默认带 [NTR] 徽标；切换模型不再串用思考等级，同步子代理的回合就地收尾，工具卡不再刷屏。
+
+### 改进
+
+- **acp**：NTR 会话自动生成的标题默认带 `[NTR] ` 前缀，侧栏一眼可辨，设置页可关闭。([c8fc168](https://github.com/GDWhisper/dsh-ntr/commit/c8fc168))
+
+### 修复
+
+- **acp**：工具卡统一成一个固定名称，原始命令保留在参数里，新宿主上不再为每条命令刷出一对「未知工具」提示。([284ca6d](https://github.com/GDWhisper/dsh-ntr/commit/284ca6d))
+- **acp**：同步子代理在回答返回时就结束本轮，不再在已完成的回答后面追加「已转交后台任务」的说明。([02286c9](https://github.com/GDWhisper/dsh-ntr/commit/02286c9))
+- **acp**：切换模型后不再沿用上一个模型的思考等级，首轮用新模型自己的默认值。([a1d40af](https://github.com/GDWhisper/dsh-ntr/commit/a1d40af))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.0...v0.4.1
+
+---
+
+NTR session titles carry the [NTR] badge by default; a model switch no longer keeps a stale thought level, synchronous subagents close their turn in place, and tool cards stop flooding the stream.
+
+### Improved
+
+- **acp**: generated NTR session titles carry the `[NTR] ` prefix by default, so they stand out in the sidebar; a settings toggle turns it off. ([c8fc168](https://github.com/GDWhisper/dsh-ntr/commit/c8fc168))
+
+### Fixed
+
+- **acp**: tool cards share one fixed name and keep the original command in their arguments, so newer hosts no longer emit an "unknown tool" pair for every command. ([284ca6d](https://github.com/GDWhisper/dsh-ntr/commit/284ca6d))
+- **acp**: a synchronous subagent's turn closes when its answer returns instead of appending a "deferred to a background task" line under a complete reply. ([02286c9](https://github.com/GDWhisper/dsh-ntr/commit/02286c9))
+- **acp**: switching models no longer carries the previous model's thought level; the first turn runs the new model's own default. ([a1d40af](https://github.com/GDWhisper/dsh-ntr/commit/a1d40af))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.4.0...v0.4.1
+
+## [0.4.0] - 2026-11-07
+
+NTR 对话新增子代理面板：头部触发器、六状态清单与只读详情；斜杠菜单接入 agent 技能；连接测试失败时报告原因。
+
+### 新增
+
+- **acp**：连接测试失败时报告原因分类（未安装、安装失败、启动失败、超时、握手失败）与 stderr 尾部。([4e5194e](https://github.com/GDWhisper/dsh-ntr/commit/4e5194e))
+- **acp**：NTR 会话跟踪外部子代理的生命周期状态，取消、回合结束、释放、关闭等路径写入终态，状态行不会停在运行中。([36189de](https://github.com/GDWhisper/dsh-ntr/commit/36189de))
+- **acp**：NTR 视图显示只读子代理条：状态徽标、类型、经过时间与工具调用数，最新派发在前。([d60b44c](https://github.com/GDWhisper/dsh-ntr/commit/d60b44c))
+- **acp**：ACP 对话的头部显示子代理触发器与六状态只读清单，累计数与运行数分开统计；面板无法服务的形状回落宿主组件。([a4a3bcf](https://github.com/GDWhisper/dsh-ntr/commit/a4a3bcf))
+- **acp**：子代理清单可打开只读详情，查看单个 worker 的派发参数与终态。([a678e74](https://github.com/GDWhisper/dsh-ntr/commit/a678e74))
+- **acp**：斜杠菜单列出 agent 的技能，选中后向草稿插入技能引用；命令行与技能行冲突时命令优先。([c931fb1](https://github.com/GDWhisper/dsh-ntr/commit/c931fb1))
+- **acp**：子代理详情按 worker 折叠成与主转录一致的块：消息、思考、工具卡、计划与事件卡，另有原始事件切换。([9db8917](https://github.com/GDWhisper/dsh-ntr/commit/9db8917))
+- **acp**：子代理详情的名称、徽标与计数固定在滚动区外，流从最新帧打开，读者停在底部时跟随直播更新。([bbf3e7a](https://github.com/GDWhisper/dsh-ntr/commit/bbf3e7a))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.10...v0.4.0
+
+---
+
+### Added
+
+- **acp**: connection tests report why they failed — classified as not installed, install failed, start failed, timeout, or handshake failed — plus the stderr tail. ([4e5194e](https://github.com/GDWhisper/dsh-ntr/commit/4e5194e))
+- **acp**: NTR conversations track an external subagent's lifecycle; cancel, turn end, release and close write a terminal state, so a row never stays running. ([36189de](https://github.com/GDWhisper/dsh-ntr/commit/36189de))
+- **acp**: the NTR view shows a read-only subagent strip with a state badge, type, elapsed time and tool-call count, newest dispatch first. ([d60b44c](https://github.com/GDWhisper/dsh-ntr/commit/d60b44c))
+- **acp**: ACP conversations get their own subagent trigger in the header with a six-state read-only list; cumulative and running counts stay apart, and a shape the panel cannot serve falls back to the host component. ([a4a3bcf](https://github.com/GDWhisper/dsh-ntr/commit/a4a3bcf))
+- **acp**: the subagent list opens a read-only detail for one worker with its dispatch arguments and terminal state. ([a678e74](https://github.com/GDWhisper/dsh-ntr/commit/a678e74))
+- **acp**: the slash menu lists the agent's skills; picking one inserts a skill reference into the draft, and commands win over skills on a same-source conflict. ([c931fb1](https://github.com/GDWhisper/dsh-ntr/commit/c931fb1))
+- **acp**: the subagent detail folds each worker's stream into the same blocks as the main transcript — messages, reasoning, tool cards, plan and event cards — with a raw-events toggle. ([9db8917](https://github.com/GDWhisper/dsh-ntr/commit/9db8917))
+- **acp**: the subagent detail pins its name, badge and counters outside the scrollport; the stream opens at the newest frame and follows live updates while the reader stays at the bottom. ([bbf3e7a](https://github.com/GDWhisper/dsh-ntr/commit/bbf3e7a))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.10...v0.4.0
+
+## [0.3.10] - 2026-11-06
+
+带工具调用的回合恢复正常：跑完、给出回答，工具卡显示真实输出（[#10](https://github.com/GDWhisper/dsh-ntr/issues/10)）；NTR 会话的侧边栏标题自动取首条用户消息（[#11](https://github.com/GDWhisper/dsh-ntr/issues/11)）。
+
+### 修复
+
+- **acp**：派了后台 worker 的回合，在 worker 卡着一个未完成的工具调用时改用更长的静默窗等它（`backgroundTaskToolMs`，默认 30 分钟），迟到的报告不再丢。([3151282](https://github.com/GDWhisper/dsh-ntr/commit/3151282))
+- **acp**：带工具调用的回合跑完并给出正文回答，不再在工具卡之后立刻结束、界面只显示「已完成」。([0aac54a](https://github.com/GDWhisper/dsh-ntr/commit/0aac54a)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**：宿主的记忆召回一类上下文注入不再进入 NTR 会话的消息记录。([0aac54a](https://github.com/GDWhisper/dsh-ntr/commit/0aac54a)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**：聊天里的工具卡显示该次调用的真实输出，不再是「ran inside the ACP agent process」占位文字。([864ccb3](https://github.com/GDWhisper/dsh-ntr/commit/864ccb3)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**：NTR 会话的侧边栏标题自动取首条用户消息。([713ec0f](https://github.com/GDWhisper/dsh-ntr/commit/713ec0f)) ([#11](https://github.com/GDWhisper/dsh-ntr/issues/11))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.9...v0.3.10
+
+---
+
+### Fixed
+
+- **acp**: a turn that dispatched a background worker waits on a longer silence window while the worker sits inside an unfinished tool call (`backgroundTaskToolMs`, 30 minutes by default), so a late report is no longer lost. ([3151282](https://github.com/GDWhisper/dsh-ntr/commit/3151282))
+- **acp**: a turn that calls a tool runs to completion and answers in prose instead of ending right after the tool card with only "已完成" in the UI. ([0aac54a](https://github.com/GDWhisper/dsh-ntr/commit/0aac54a)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**: host context injections such as memory recalls no longer enter an NTR conversation's message record. ([0aac54a](https://github.com/GDWhisper/dsh-ntr/commit/0aac54a)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**: a tool card in the chat shows that call's real output instead of the "ran inside the ACP agent process" pointer. ([864ccb3](https://github.com/GDWhisper/dsh-ntr/commit/864ccb3)) ([#10](https://github.com/GDWhisper/dsh-ntr/issues/10))
+- **acp**: an NTR session's sidebar title comes from its first user message. ([713ec0f](https://github.com/GDWhisper/dsh-ntr/commit/713ec0f)) ([#11](https://github.com/GDWhisper/dsh-ntr/issues/11))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.9...v0.3.10
+
+## [0.3.9] - 2026-11-05
+
+修复 DSH 0.2.2 及更新版本上 NTR 会话无法发送消息的问题。
+
+### 修复
+
+- **acp**：DSH 0.2.2 及更新版本上的 NTR 会话恢复正常发送消息，不再在发送时以路由错误失败。([889cc20](https://github.com/GDWhisper/dsh-ntr/commit/889cc20))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.8...v0.3.9
+
+---
+
+NTR conversations send normally again on DSH 0.2.2 and newer.
+
+### Fixed
+
+- **acp**: NTR conversations on DSH 0.2.2 and newer send messages normally instead of failing with a route error. ([889cc20](https://github.com/GDWhisper/dsh-ntr/commit/889cc20))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.8...v0.3.9
+
+## [0.3.8] - 2026-11-05
+
+### 新增
+
+- **acp**：agent 因频率限制拒绝本轮时，输入框上方显示一行「agent 已限流」，正文用 agent 自己写的说明（含重置时间）；没有按钮，切换模型走 composer 里的模型菜单。
+- **acp**：agent 以 `refusal` 拒绝本轮且没有正文时，说明里带上 agent 自己给出的理由，不再只说「没有可见输出」。
+
+### 修复
+
+- **acp**：guard 剥离 `runtime-context`、`agent-instructions`、`skill-catalog`、`plugin` 四类来源；只含 `runtime-context` 的唤醒轮以空批次进入，工具续跑步只把过滤后的工具消息交给 adapter，两者都不再以 `blocked` 收尾。([32b8081](https://github.com/GDWhisper/dsh-ntr/commit/32b8081))
+
+---
+
+### Added
+
+- **acp**: when the agent refuses a turn because it is rate limited, one row above the input box says "agent 已限流" and repeats the agent's own message (reset time included); there is no button — switching models stays in the composer's model menu.
+- **acp**: when the agent refuses a turn with no prose, the note quotes the agent's own reason instead of only saying "no visible output".
+
+### Fixed
+
+- **acp**: the guard strips `runtime-context`, `agent-instructions`, `skill-catalog`, and `plugin`; a `runtime-context`-only wake turn enters with an empty batch, and tool continuations pass only filtered tool messages to the adapter, so neither ends as `blocked`. ([32b8081](https://github.com/GDWhisper/dsh-ntr/commit/32b8081))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.7...v0.3.8
+
+## [0.3.7] - 2026-11-05
+
+CodeBuddy 的每个聊天会话使用独立子进程，多会话并行互不影响；回合进行中保存配置不再打断对话，暂存、失败与重试都能看见。
+
+### 新增
+
+- **acp**：CodeBuddy 的每条聊天会话使用独立 ACP 子进程，多会话各自独立运行；目录探测使用一次性进程，探测结束立即回收。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：首轮失败并回滚的会话立即回收自己的子进程，不在后台常驻；会话关闭但 `session/prompt` 尚未结算时，回收与工作区搬迁保留进程，直到请求落地。空闲释放只等 live 或 released 会话上的待答请求，已关闭会话的残留请求不阻止进程回收。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：单个子进程启动失败、同一 agent 还有健康进程时，仍然写一条含 `failed to start` 的错误日志，同一条失败不重复提示。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：测试新增 A1 集成用例，覆盖每会话一进程、停止窗口、首轮回收、未结算 prompt 保护、空闲释放越过已关闭会话的待答请求、恢复在途归属、聚合状态、启动失败通知与 fork 禁用。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：保存 NTR agent 配置时若目标 agent 正在跑回合，可以选「回合结束后保存」或「立即保存并中断」；选择回合后保存会冻结点击时的配置，继续编辑则取消暂存并提示重新保存。
+- **acp**：保存结果在页顶提示：失败、等待过期、被拒绝、强制保存只完成一部分都常驻并给出重试或强制保存；成功短暂显示后自动消失。
+- **acp**：删除或停止 agent 前显示将影响的会话数。
+- **acp**：多个 agent 有暂存时可「全部立即保存」；确认卡列出会被中断的 Agent 与各自会话数，部分失败会列出未写入的 agent。
+- **acp**：同一帧多个 agent 保存成功只显示一条成功行，正文列出保存的 agent 名；超过 3 个时列前 3 个并注明总数。
+- **acp**：删除 agent 后，它的暂存保存显示单独的「该 Agent 已被删除」行，只给关闭。
+
+### 改进
+
+- **acp**：停止、保存或删除 agent 时进入停止窗口；窗口内到达的消息直接失败，不排队，停止完成后下一条消息新建进程。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：恢复在途时复用同一个 ACP 会话，不新建第二个；会话归属丢失时返回 `session_orphaned`，下一条消息重新创建，不落到其他会话的进程。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：同一 agent 的多进程状态聚合成一条：任一进程可用即为可用，全部崩溃或释放为已停止；单条启动失败不会拖累健康 agent 的聚合状态。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：CodeBuddy 的 fork 能力关闭，分支入口禁用；即使对端声明支持，请求也返回 `fork_unsupported`。([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**：活动回合期间 HMR 替换被延迟，回合结束后自动重试，连续失败或回合长时间不结束会提示一次；插件设置保存可选择延后。DSH 设置写入本身不经本仓拦截，宿主补丁到位前不会自动排队。
+- **acp**：同一 agent 连续保存时，旧的暂存不会在回合结束后覆盖新值；删除 agent 会先取消它的暂存，避免配置被写回。
+- **acp**：单个 agent 的「立即保存」只处理该 agent，不再顺带写入其它 agent 的暂存；全局冲刷仍走「全部立即保存」。
+- **acp**：保存与删除在无法写盘时明确失败，不再静默成功；写盘失败时内存保持旧配置。
+- **acp**：只有门禁明确报告可用时才按门禁活动会话判断空闲，否则改用本地会话，避免把不完整快照当成空闲证据。
+- **acp**：关闭的失败 / 过期提示刷新后不再出现；同一 agent 的新保存会清掉它旧的失败提示与「已取消暂存」行。
+- **acp**：取消暂存与重试保存只在收到明确结果时算成功；被新保存取代的取消不再显示成用户取消。
+- **acp**：删除或停止 agent 后，迟到的模型探测结果不再写回目录。
+
+### 修复
+
+- **acp**：切换超时处理方式不再改写已保存的等待时长；「不等待」在切到「超时中止」时只在运行时按 30 秒生效，切回「自动推进」或重启后仍是「不等待」。已被旧版本写成 30 秒的记录需要重新选择一次「不等待」。
+
+---
+
+Each CodeBuddy chat session runs in its own process, so sessions run in parallel without affecting each other; a save still does not interrupt a running conversation, and held saves, failures and retries are all visible.
+
+### Added
+
+- **acp**: each CodeBuddy chat session runs in its own ACP child process, and catalog probes use a one-shot process that is reclaimed as soon as the probe ends. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: a session that fails its first turn and rolls back reclaims its child immediately instead of leaving it resident; while `session/prompt` is still unanswered, pruning and workspace moves keep the process alive until the request settles. Idle release counts only prompts on live or released sessions, so a leftover request on a closed session does not block reclaiming the process. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: when one child fails to start while a sibling is healthy, the plugin still logs one error line containing `failed to start`, and the same failure is not reported again. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: new A1 integration tests cover one process per session, the stopping window, first-turn rollback, unanswered prompt protection, idle release past a closed session's unanswered prompt, in-flight resume ownership, aggregate status, start-failure notices and disabled fork. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: when the target agent has a running turn, saving its settings offers "save after turns" or "save now and interrupt"; the deferred save freezes the values at click time, and editing the form cancels it and asks for a new save.
+- **acp**: save results appear at the page top: failure, expiry, refusal and a partly completed forced save stay until dismissed with a retry or force action; success hides itself shortly.
+- **acp**: removing or stopping an agent now shows how many sessions it will affect.
+- **acp**: when several agents have held saves, "save all now" offers one confirmation that lists the agents to interrupt and their session counts; a partial failure lists the agents that were not written.
+- **acp**: successful saves for several agents in the same frame collapse into one success line that lists the saved agent names; beyond three it shows the first three plus the total.
+- **acp**: after an agent is deleted, its held save shows a dedicated "this agent was deleted" line with a close action only.
+
+### Improved
+
+- **acp**: stopping, saving or deleting an agent opens a stopping window; messages arriving in that window fail immediately and are not queued, and the next message starts a new process after the stop completes. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: an in-flight resume reuses the same ACP session and creates no second one; a lost session ownership returns `session_orphaned`, and the next message creates a new session and does not fall back to another session's process. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: the status of several processes for one agent is aggregated into one view: any usable process makes the agent usable, and a fully crashed or released set reports stopped; a single start failure keeps a healthy agent's aggregate status usable. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: fork is disabled for CodeBuddy, the branch entry is disabled, and a request returns `fork_unsupported` even if the peer advertises support. ([ee78ac2](https://github.com/GDWhisper/dsh-ntr/commit/ee78ac2))
+- **acp**: HMR replacement is delayed while a turn is active and retries after it ends, with one notice when retries fail or the turn never ends; plugin setting saves can be deferred. DSH setting writes themselves are not intercepted by this plugin, so the host must patch its write chain before they queue automatically.
+- **acp**: a newer save of the same agent invalidates the older held snapshot, and deleting an agent cancels its held save first, so the removed settings are not written back.
+- **acp**: "save now" for a single agent only handles that agent and no longer flushes other agents' held saves; a global flush still happens through "save all now".
+- **acp**: saving and deleting now fail explicitly when nothing can be written, instead of reporting success; a failed write keeps the old definition in memory.
+- **acp**: idle checks trust the gate's active sessions only when the gate reports itself available; otherwise the UI falls back to local sessions and no longer treats an incomplete snapshot as evidence of idleness.
+- **acp**: closed failure and expiry banners stay closed after a reload; a new save of the same agent clears its old failure line and its "staging cancelled" line.
+- **acp**: cancelling a held save and retrying a save count as successful only on an explicit result; a cancellation superseded by a newer save is no longer shown as a user cancellation.
+- **acp**: after an agent is deleted or stopped, late model probe results are no longer written back to the catalog.
+
+### Fixed
+
+- **acp**: switching the timeout action no longer rewrites the saved wait window; "no wait" runs as a 30-second floor only while "time out and abort" is active, and "auto-advance" or a restart still reports "no wait". Records an older build already rewrote to 30 seconds must be set back to "no wait" once.
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.6...v0.3.7
+
+## [0.3.6] - 2026-11-02
+
+子智能体清单能看出后台任务还在不在跑。
+
+### 改进
+
+- **acp**：子智能体清单里还在跑的后台任务会亮起运行中的圆点，任务结束或本轮收口后回到空闲；刷新页面后仍在跑的任务也照样亮着。([669aa91](https://github.com/GDWhisper/dsh-ntr/commit/669aa91))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.5...v0.3.6
+
+---
+
+The subagent catalog shows whether a background worker is still running.
+
+### Improved
+
+- **acp**: background workers that are still running show the running dot in the subagent catalog, and go back to idle when they finish or the turn closes; a page reload keeps showing the live state. ([669aa91](https://github.com/GDWhisper/dsh-ntr/commit/669aa91))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.5...v0.3.6
+
+## [0.3.5] - 2026-11-01
+
+后台任务可见、等得到结果；重启 DSH 不丢会话；新会话首轮按当前显示的模式执行。
+
+### 新增
+
+- **catalog**：后台派出的 agent 进入子智能体清单，条目只读。([459bc73](https://github.com/GDWhisper/dsh-ntr/commit/459bc73))
+
+### 改进
+
+- **chat**：后台任务持续汇报时，回合不再提前收口。([a8a6d32](https://github.com/GDWhisper/dsh-ntr/commit/a8a6d32))
+
+### 修复
+
+- **chat**：新会话首轮按当前显示的模式执行。([680953e](https://github.com/GDWhisper/dsh-ntr/commit/680953e))
+- **acp**：关闭 DSH 后会话可恢复，退出不再拖长。([f4abd8e](https://github.com/GDWhisper/dsh-ntr/commit/f4abd8e))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.4...v0.3.5
+
+---
+
+Background workers are visible and get to finish their answer; restarting DSH no longer drops conversations; a new conversation starts in the mode already displayed.
+
+### Added
+
+- **catalog**: detached workers show up in the subagent catalog as read-only entries. ([459bc73](https://github.com/GDWhisper/dsh-ntr/commit/459bc73))
+
+### Improved
+
+- **chat**: turns stay open while a background worker keeps reporting. ([a8a6d32](https://github.com/GDWhisper/dsh-ntr/commit/a8a6d32))
+
+### Fixed
+
+- **chat**: the first turn of a new conversation runs in the displayed mode. ([680953e](https://github.com/GDWhisper/dsh-ntr/commit/680953e))
+- **acp**: conversations stay recoverable after the host exits, and shutdown is prompt. ([f4abd8e](https://github.com/GDWhisper/dsh-ntr/commit/f4abd8e))
+
+**Full Changelog**: https://github.com/GDWhisper/dsh-ntr/compare/v0.3.4...v0.3.5
+
+## [0.3.4] - 2026-11-01
+
+底部的模型选择不再被思考等级顶掉；上一条还在生成时插入的消息也能正常接上，不会当场失败。
+
+### 修复
+
+- **模型选择不再被思考等级顶掉**：有的智能体把思考等级标成了模型分类，之前底部的模型选择会整块换成思考清单，导致每条消息都发不出去；现在模型位置只认真正的模型选项，被挤掉的选项照样能在额外配置里选到，实在分不清时照常发送而不是拦下这一轮。([3ab1b6e](https://github.com/GDWhisper/dsh-ntr/commit/3ab1b6e)) ([#8](https://github.com/GDWhisper/dsh-ntr/issues/8))
+- **生成中插入的消息会被接上**：上一条回复还在生成时再发一条消息，之前这一轮直接失败、消息被丢掉；现在会先停住当前这轮，等对方收住后把这条作为下一条发出去。([97c1f0f](https://github.com/GDWhisper/dsh-ntr/commit/97c1f0f))
+
+## [0.3.3] - 2026-11-01
+
+CodeBuddy 的后台任务现在会把答案交回主对话，图片可以直接发给 agent，底部的生成速度也不再被工具等待拖慢。
+
+### 新增
+
+- **图片随消息发给 agent**：消息里带的图片会作为图片内容转发给 agent，文字与图片的顺序保持不变；agent 不支持图片输入时直接说明原因并拦下这一轮，不会把残缺的消息发出去，首轮也不会因此把会话锁死。([03a47ff](https://github.com/GDWhisper/dsh-ntr/commit/03a47ff))
+- **消息可以并进后台任务**：CodeBuddy 正在跑后台任务时发来的消息会被并进那次运行，回合等后台收尾再把正文补进当前对话，不再一发出就结束、答案只剩在 NTR 视图里。([3e236df](https://github.com/GDWhisper/dsh-ntr/commit/3e236df))
+
+### 改进
+
+- **底部生成速度按连续输出计**：`x tok/s` 只统计连续写字的段落，工具等待与审批停顿不再把速度拖到很低；这一轮的读数随后续打开会话保留，刷新页面回来还是同一个值。([733e14a](https://github.com/GDWhisper/dsh-ntr/commit/733e14a))
+
+### 修复
+
+- **分支按钮恢复可用**：点分支按钮不再报错，分叉照常带上 agent 上下文。([b846fa7](https://github.com/GDWhisper/dsh-ntr/commit/b846fa7))
+- **后台运行迟到的正文不再算成别的回答**：已经结束等待的后台运行如果又开口，它的话只留在 NTR 视图，不会被当成当前这一轮的回答；这一轮确实没有可见输出、又可能是被后台运行吞掉时，会说明去 NTR 视图看，而不是只说 agent 没有反应。([91704cc](https://github.com/GDWhisper/dsh-ntr/commit/91704cc))
+- **交给后台 worker 的活儿也等得到答案**：CodeBuddy 把任务派给后台 worker 时，回合会一直开着直到 worker 报回结果，最终答案出现在主对话里而不是只在 NTR 视图；并行派了多个 worker 会等齐，取消或下一轮不会收进迟到的答案，真没有答案时直接说明。([81b30e8](https://github.com/GDWhisper/dsh-ntr/commit/81b30e8))
+
+## [0.3.2] - 2026-10-31
+
+NTR 会话现在自己接管消息动作与分支，挂起会话在界面上可见、可恢复，DSH 重启后也不丢。
+
+### 新增
+
+- **composer 显示上下文占用**：ACP 会话里也能看到 agent 报告的上下文占用环，不再只有原生会话有。([2f7e111](https://github.com/GDWhisper/dsh-ntr/commit/2f7e111))
+- **挂起会话横幅与恢复按钮**：进程被回收后输入框上方会说明会话已挂起，点「恢复」即可唤醒，不必先发一条消息。([d39adcb](https://github.com/GDWhisper/dsh-ntr/commit/d39adcb))
+- **空闲释放窗口可配置**：设置页「进程」分区用 1–60 分钟滑块决定空闲多久回收进程，保存后对运行中的进程立即生效；智能体里的同名设置改为「留空跟随全局」。([6663b84](https://github.com/GDWhisper/dsh-ntr/commit/6663b84))
+- **NTR 会话接管消息动作与分支**：点赞/点踩图标不再出现在 NTR 会话里；分支按钮改为带上 agent 上下文，子会话会记住父会话的内容，失败时就地说明原因。([97bc761](https://github.com/GDWhisper/dsh-ntr/commit/97bc761))
+
+### 改进
+
+- **挂起会话改偏好不再唤醒进程**：模型、思考等级、mode 改完立刻显示，进程只在你发消息或点「恢复」时回来。([61b5d77](https://github.com/GDWhisper/dsh-ntr/commit/61b5d77))
+- **重启 DSH 不丢挂起会话**：会话记录随插件落盘，重启后横幅、恢复按钮与下一条消息的自动恢复都还在。([bcbb9d7](https://github.com/GDWhisper/dsh-ntr/commit/bcbb9d7))
+
+### 修复
+
+- **恢复后模型芯片不再回跳**：在挂起会话上换过模型或思考等级，恢复生成时不会又显示成旧值。([7eefac4](https://github.com/GDWhisper/dsh-ntr/commit/7eefac4))
+- **分支按钮在旧宿主上不再消失**：宿主换了图标导出名时按钮照常显示可点。([f23cf3f](https://github.com/GDWhisper/dsh-ntr/commit/f23cf3f))
+- **NTR 界面不再串到普通会话**：NTR 页签与上下文占用环只在 NTR 会话里出现，普通会话回到原生界面。([7e113a8](https://github.com/GDWhisper/dsh-ntr/commit/7e113a8))
+
+## [0.3.1] - 2026-10-29
+
+设置页现在有一份独立的运行日志，agent 的运行消息不再占用顶部通知横幅；内置更新也能识别通过 registry 安装的插件。
+
+### 新增
+
+- **设置页运行日志**：agent 的运行消息（会话挂起、回合超时、长时间无响应等）集中记录在「日志」标签，新消息在前、最多保留 200 条（刷新页面后清空），未读有提示。([8933ecf](https://github.com/GDWhisper/dsh-ntr/commit/8933ecf))
+
+### 改进
+
+- **顶部通知只报操作失败**：横幅只保留你自己操作的失败（检测、保存、探测、更新、权限答复等），不再被 agent 的运行消息覆盖。([8933ecf](https://github.com/GDWhisper/dsh-ntr/commit/8933ecf))
+
+### 修复
+
+- **内置更新能识别 registry 安装**：当宿主把安装来源记成「包名@版本」时，不再误判为源码安装，更新卡可以正常检查并安装。([b5ab2cd](https://github.com/GDWhisper/dsh-ntr/commit/b5ab2cd))
+- **会话挂起原因分别说明**：agent 空闲退出时不再误报「进程已退出」，工作区切换、恢复失败、卡死与崩溃在日志里各自说明。([8933ecf](https://github.com/GDWhisper/dsh-ntr/commit/8933ecf))
+
+## [0.3.0] - 2026-10-29
+
+插件现在能在设置页里自己更新，卡死的回合会自动结束，还多了一个 Cursor CLI 预设。
+
+### 新增
+
+- **内置更新**：设置页的版本徽标会检查新版本并可直接安装，按提示重启 DSH 生效。([f9095d1](https://github.com/GDWhisper/dsh-ntr/commit/f9095d1))
+- **卡死的回合自动结束**：agent 长时间没有任何动静时，这一轮会自动结束并说明原因，不再让对话永远卡在「进行中」；下一条消息会自动恢复会话，agent 不支持会话恢复时会重置会话并说明上下文已丢失。([dd432c3](https://github.com/GDWhisper/dsh-ntr/commit/dd432c3))
+- **Cursor CLI 预设**：装了 Cursor CLI 就能在预设列表里直接选用，新旧两种启动命令都能识别。([b844ddb](https://github.com/GDWhisper/dsh-ntr/commit/b844ddb))
+
+### 改进
+
+- **设置页显示插件版本**：NTR 设置标题上显示当前安装的 dsh-ntr 版本号。([dd432c3](https://github.com/GDWhisper/dsh-ntr/commit/dd432c3))
+- **更新的边界说清楚**：源码或本地安装不提供升级，有对话进行中时不会安装，安装被中断时提示刷新确认版本而不是猜一个。([f9095d1](https://github.com/GDWhisper/dsh-ntr/commit/f9095d1))
+
+## [0.2.1] - 2026-10-29
+
+设置页拆成了一次只看一件事的分区，聊天里的 token 数字也不再自相矛盾（[#6](https://github.com/GDWhisper/dsh-ntr/issues/6)）。
+
+### 新增
+
+- **设置页分区导航**：「智能体」「审批时限」「对话外观」分成三个分区，一次只展开一个；连接状态收成页面底部一行，细节要手动点「查看诊断」。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+- **「添加智能体」改为按钮进入**：点按钮才展开填写页，保存成功后自动回到智能体列表。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+
+### 改进
+
+- **切换分区不丢正在填的内容**：切分区、切「模型 / 连接 / 高级」都只是隐藏，填了一半的东西还在；模型列表只在当前可见时才去读取。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+- **诊断收纳噪音，异常不收纳**：预设来源、「重新检测与刷新」和模式横幅移进「查看诊断」；模式一旦出现异常仍直接显示在页面上方。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+- **「还没读取」和「确认没有」分开提示**：智能体空列表不再一律写成「未配置」。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+- **审批时限分区按可用性出现**：宿主不提供该配置时，导航里不再留一个空分区。([4def8c9](https://github.com/GDWhisper/dsh-ntr/commit/4def8c9))
+
+### 修复
+
+- **聊天里的 token 用量不再离谱**（[#6](https://github.com/GDWhisper/dsh-ntr/issues/6)）：回答旁边的数字改为按输出长度估算，不再把上下文占用当成请求 token，也就不会出现自相矛盾的总量和速度；没有数据来源的缓存命中率直接不显示，而不是显示 0%。上下文占用仍在 NTR 视图里看。([3848188](https://github.com/GDWhisper/dsh-ntr/commit/3848188))
+
+## [0.2.0] - 2026-10-28
+
+审批询问现在直接出现在对话里，每一条都会送到你面前，不会再隐形挂起（[#2](https://github.com/GDWhisper/dsh-ntr/issues/2)）。
+
+### 新增
+
+- **审批卡直接出现在对话里**：agent 要动敏感东西时，询问卡出现在聊天输入框上方，和输入框同宽居中；选项就是 agent 给的那些（包括「始终允许」），点哪个它就收到哪个。([78545b6](https://github.com/GDWhisper/dsh-ntr/commit/78545b6))
+- **每条询问都带完整上下文**：卡片标题带工具名和参数摘要（命令、路径等），有等待期限时显示倒计时；多条询问按到达顺序堆叠。([78545b6](https://github.com/GDWhisper/dsh-ntr/commit/78545b6))
+
+### 改进
+
+- **设置页仍是跨会话镜像**：对话没打开时，仍可在「NTR 设置 → 待处理权限请求」里答复，两处看到的是同一批询问。([78545b6](https://github.com/GDWhisper/dsh-ntr/commit/78545b6))
+- **取消或关闭会话会结算未答询问**：不再留下永远等不到的卡片。([78545b6](https://github.com/GDWhisper/dsh-ntr/commit/78545b6))
+
+### 修复
+
+- **审批询问不再隐形挂起**（[#2](https://github.com/GDWhisper/dsh-ntr/issues/2)）：任何询问都会在对话里出现，不会再出现「接受了却不显示、会话永久挂起」的情况。([78545b6](https://github.com/GDWhisper/dsh-ntr/commit/78545b6))
+- **深色模式下界面配色跟随宿主**：状态点、徽标、diff 行、危险按钮、报错条不再出现浅色块。([7467398](https://github.com/GDWhisper/dsh-ntr/commit/7467398))
+- **审批卡与输入框对齐**：不再比输入框宽出一截。([fccd95b](https://github.com/GDWhisper/dsh-ntr/commit/fccd95b))

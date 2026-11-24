@@ -1,0 +1,80 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Rehearse the release without publishing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Trusted publishing needs npm >= 11.5.1; dist-tag management needs
+      # >= 11.21.0. The token path is gone: npm exchanges the workflow's OIDC
+      # token instead, so the npmjs.com trusted publisher must name this repo
+      # and this workflow file.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (typecheck + tests + build)
+        run: npm run prepack
+
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match package.json version $VERSION"
+            exit 1
+          fi
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --access public --provenance
+
+      - name: Pin latest to the version just published
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          for _ in $(seq 1 90); do
+            npm view --prefer-online "dsh-ntr@$VERSION" version >/dev/null 2>&1 && break
+            sleep 10
+          done
+          npm view --prefer-online "dsh-ntr@$VERSION" version >/dev/null 2>&1 || {
+            echo "::error::dsh-ntr@$VERSION never became available on the registry"
+            exit 1
+          }
+          npm dist-tag add "dsh-ntr@$VERSION" latest
+
+      # npmmirror caches packuments indefinitely; without this, a stale "latest"
+      # (e.g. an early placeholder release) keeps resolving for CN users.
+      - name: Request npmmirror sync
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        run: curl -fsS -X PUT "https://registry.npmmirror.com/-/package/dsh-ntr/syncs"
+
+      - name: Publish (rehearsal)
+        if: ${{ inputs.dry_run }}
+        run: npm publish --access public --provenance --dry-run

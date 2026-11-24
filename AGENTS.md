@@ -1,0 +1,150 @@
+# AGENTS.md
+
+`dsh-ntr` 是 DeepSeek Harness (DSH) 的 ACP（Agent Client Protocol）客户端插件：Node 宿主侧用 `@agentclientprotocol/sdk` 桥接独立的 agent 子进程，浏览器侧是 React bundle（`src/client/`，CJS 工厂函数）；它只借 DSH 的界面壳，不参与 DSH 的模型调用。
+
+- **裁决条款**：本文件与 [README.md](./README.md) 冲突时以本文件为准；本文件摘要与 `AGENTS/` 细节冲突时，以细节文档 + 代码为准，并在同一次提交里修正本文件。
+- **代码位置一律用「文件 + 符号名」引用**（可 grep 定位），不写行号——行号会随每次 diff 漂移失效。
+
+## 心智模型
+
+**本质是借 DSH 的界面壳跟 ACP agent 对话：DSH 只提供显示层，模型调用逻辑不归我们。** 推理 / 工具 / 文件读写 / 权限决策归对端 agent 进程（完全自治）；会话身份 / 消息列表 / 输入框 / 侧栏归 DSH；模型选择 / 思考等级 / 权限档是 agent 自己的概念，不是 DSH 的模型目录。
+**不要把 ACP 当成 DSH LLM 层的一个 provider**：那根轴要求经 `session/selectModel` 写 `provider=acp` 路由，于是污染全局默认模型、被目录门禁拒、原生座位必须遮蔽。现行做法是插件只写自己的绑定；guard 在唤醒驱动前用 `agent.model.select()` 把绑定记成该会话的模型选择（0.2.2+ 在 step preparation 前固定路由，`agent/request` 已不许改路由），只有老宿主才回落到 `agent/request` 改写。
+→ 归属模型、消息走向、绑定、工作区、preset 外壳、agent 锁定：[AGENTS/architecture.md](./AGENTS/architecture.md)。
+
+## 快速命令
+
+- 提交前全量验证：`npm run prepack`（行数门禁 + typecheck + `vitest run tests` + build，见 [package.json](./package.json) `scripts`）
+- 单文件 / 单用例：`npx vitest run tests/bridge.spec.ts -t "spawns, initializes"`
+- 只重建浏览器 Bundle：`npx tsdown`
+- 挂到本地 DSH：`dsh plugin --profile web add ./`
+
+## 硬约束（摘要）
+
+> 40 条编号全部有效；每条是规则摘要，细节与「为什么」在箭头指向的文档。
+
+### 构建与入口（1–6）
+
+1. **浏览器 Bundle 必须是 CJS 工厂函数**：`tsdown.config.mjs` 保持 `format: 'cjs'`，banner/footer 用 `window.__ModuleLoader__.load({ id: 'dsh-ntr', factory: (require) => { … } })` 包裹；DSH 前端微内核靠惰性 CJS 模块表供依赖，裸 ESM 在运行时解析失败。
+2. **`src/index.ts` 必须具名导出 `name` / `inject` / `apply`**：Cordis 靠具名导出提取插件元数据，`export default` 会让加载静默失效。
+3. **路由必须注册完整路径**：SSE 写 `path: '/api/acp/stream'`。WebServer 注册只查重、不校验绝对路径，相对路径不报错但永远命不中，请求落入 SPA fallback、SSE 静默 404。
+4. **`session/set_config_option` 响应必须反哺本地快照**：提取权威 `configOptions` 并广播 `session/meta`，不能只等事件（部分 agent 更新后不再推 `config_option_update`）。→ [protocol.md §1](./AGENTS/protocol.md)
+5. **ACP 错误必须优先解析 `error.data`**：`-32603` 的 `billing_error` / `rate_limit` / `auth_error` 在 `data` 里，只读 message 会丢原因（`describeError`）。→ [protocol.md §1](./AGENTS/protocol.md)
+6. **相对导入必须写 `.ts` / `.tsx` 后缀**：`rewriteRelativeImportExtensions` 只改写已带后缀的导入，无后缀在 `type: module` 的 `lib/` 产物里运行时报 `ERR_MODULE_NOT_FOUND`。
+
+### 配置、目录与状态（7–9、21、27、28、32）
+
+7. **agent 定义必须过 `validateAgentDef` / `saveAgent`**：严格校验 command / id / args，自动施加 `allowedCwdRoots`；默认工作区取 `defaultAgentWorkspace()`，**严禁把 `process.cwd()` 塞进 roots**（宿主启动目录可能是 `$HOME`）。预设 `AGENT_PRESETS`（bridge/state-paths.ts）与 `DEFAULT_KNOWN_PRESETS`（client/store/presets.ts）是手拷贝，必须同步。→ [state.md §2](./AGENTS/state.md)
+8. **【旧隔离前提已退役】ACP 模型不进 DSH 模型目录，模型面只走 `agent/catalog`**：`listModels('acp')` 返回空。`agent/catalog` 纯内存、**绝不 spawn**；探测只允许四种有手势来源（设置页按钮或模型菜单「刷新目录」/ 该 agent 自己的 session new·load / 思考卡片的「获取」按钮 / 旧缓存被顺带修好）；变体默认开放、`exposedModels` 只做可见性过滤（缺省 = 全部可见，显式 `[]` = 只留 base，规则集中在 `effectiveExposedModels`）、目录变化必须广播 `catalog/updated`。→ [state.md §4](./AGENTS/state.md)
+9. **可见性、skills 与默认 mode 开关走轻量 RPC**：`agent/set-exposed-models` / `set-auto-discover-models` / `set-skills-mcp` / `set-default-mode` 原地改、不重启进程（`agent/save` 会杀全部活动会话）；`set-skills-mcp` 严格落盘且只持久化显式 `false`（缺省 = 开），`set-default-mode` 同样严格落盘、空白串即删除；自动发现只追加「相对上一份目录新增」的模型，缺省（默认全开）时不追加、不固化目录；任何变更都广播 `agent/exposure`（含已解析的 `skillsMcpEnabled` 与可选的 `defaultMode`）。→ [state.md §5 / §2.2](./AGENTS/state.md)
+21. **NTR preset 只能由 bundle patch 声明**：`package.json` 的 `dsh.bundle.patch` + `presets/acp/acp.patch.yml`。**严禁**再往 `~/.dsh/.agent-presets/` 复制文件，**严禁**新增「安装 / 修复 preset」入口；声明内插件名按 profile 基准解析，本地插件只能经包名子路径 `dsh-ntr/acp-guard` 引用；面板读宿主 roster。→ [host.md §2](./AGENTS/host.md)
+27. **底部栏的选择属于「会话」且必须持久化**：`agentId` / `modelId` / `effort` / `mode` / `extraConfigs` 记在 `AcpConversationChoice`，落 `agents.json` 的 `conversations`；`applyChatChoice` 必须在 create 与 resume 两条路径调用（没有 mode pick 时紧随其后的 `applyAgentDefaultMode` 用 `AcpAgentDef.defaultMode` 兜底；它是设置页「高级」即时写入的 fallback，不写 conversations），`syncConversationRoute` 把 model 半接到请求路径且只增不减，切 agent（锁前）清空派生选择，所有写入只经 `patchChatChoice`。agent 不再提供的 model **必须拦截本轮**（`model_unavailable`、不发送 prompt、保留选择、首轮零输出照常回滚锁），**严禁**自动换模型；失效 effort 从记录删除并广播**一次 `info` 级** notice（换模型不是报错；卡片随后给出「获取」）。→ [state.md §3](./AGENTS/state.md)
+28. **一切运行时落盘只在 `~/.dsh/dsh-ntr/`**：`agents.json` / `model-catalog.json` / `workspaces/`；位置一律经 `pluginStateDir()`（`DSH_NTR_STATE_DIR` 可覆盖），派生的老路径从它反推；迁移必须同时改写 agent 里的绝对路径并回写磁盘。用户等待的保存 / 删除走严格落盘：无可用路径或写盘失败返回 `persist_failed`，不静默成功；候选定义只在写盘成功后提交。→ [state.md §1](./AGENTS/state.md) / [state.md §9](./AGENTS/state.md)
+32. **`AcpAgentDef.mcpServers` 走插件自己的归一形状**：每条必带 `name` 与 `transport`（`stdio` / `http` / `sse`；`acp` 传输**不支持**，客户端没有 `mcp/message`）。**四个建会话点（`createSession` / `probeConfigOptions` / resume 的 `session/load` / 分叉的 `session/fork`）必须传同一份列表**（内置 `dsh-skills` 由 `sessionMcpServers` 合并进去，只活在请求里、绝不写回 agent 定义）——agent 把它放进**进程级**作用域，一份空列表会顶掉同连接上活动会话的 MCP 工具。线格式只在 `toAcpMcpServers` 转一次（stdio **不带 `type`**，带了 agent 静默丢弃；`env` / `headers` 是 `[{name,value}]`）；宿主只校验不改形状；宿主侧 MCP（`ctx.tools`）**不经此路**转发。→ [state.md §2](./AGENTS/state.md) / [protocol.md §1](./AGENTS/protocol.md)
+
+### 进程与回合（10–12、19、23、26、29）
+
+10. **进程死亡 ≠ 会话销毁**：崩溃只走 `releaseAll`（未 `closed` 的标记 released、广播 `session/released`；关闭在途的归 `closeSession` 删，标成 released 会被 resume 复活），**严禁**删记录或广播 `session/closed`。released 会话的 prompt / setMode / setConfigOption（`/acp` RPC 面）与聊天面的下一条消息自动 resume：**先**重置 transcript 并广播 `session/reset`，**再**发 `session/load`。聊天面的四轴写入（chat-mode/model/effort/config-set）对 released 会话**只记录不唤醒**，选择由 `applyChatChoice` 在下次恢复时应用。会话记录持久化在 `agents.json`（`chatSessions`），宿主重启后按 released 复原、照常可恢复，closed 的不落盘——重启不丢上下文。唯一例外是 `prepareStalledSession` 在 agent 未声明 `loadSession` 时的 `forceReset`（就地关闭 + `session/closed`）——那是重置，不是崩溃。→ [protocol.md §2](./AGENTS/protocol.md)
+11. **生命周期事件必须带身份校验**：`child.exit` / `child.error` / `conn.closed` 分别以 `this.child === child`、`this.conn === conn` 守卫；否则旧进程迟到的 exit 会杀掉刚 resume 的新进程。→ [protocol.md §3](./AGENTS/protocol.md)
+12. **启动有超时、取消有强制定稿且必须带世代守卫**：`initialize` / `session/new` / `session/load` 经 `withStartupTimeout`（60s）；cancel 后 `armCancelFallback`（15s）强制 `turn/end`，触发时 `turnSeq` 已前进则不得动手，并解开 `settled` 闸门；粘滞取消按「本世代是否 cancel 过」判定并原样重发；fs 错误用 `new RequestError(code, message, { message })`。→ [protocol.md §4](./AGENTS/protocol.md)
+19. **空闲释放只针对没有活跃工作的进程**：只释放 `ready` 且无进行中 turn / 未结算取消 / 待答审批 / 在途命令 / 探测 / `session/new` 在途 / resume / 启动 / **live 或 released 会话上未答的 `session/prompt`（`pendingPromptsOnServableSessions`）** 的 bridge——已从 `sessions` 删除的会话，其残留请求不阻止空闲释放（否则永不答的 agent 会让进程永久常驻），但仍阻止 `pruneBridge` 与工作区搬迁（严格计数）；关闭在途的记录仍算可服务，最多多等 5 秒。空闲 live 会话不阻止释放——走 `releaseAll` 挂起成 released，下一条消息经 `session/load` 恢复；未声明 `loadSession` 的 agent 例外，仍要求无 live 会话；释放静默、不广播 `agent/notice`；探测 5 分钟固定、聊天窗口可配（设置页「进程管理」1-60 分钟，默认 30；per-agent 显式值优先，留空 = 跟随全局，`0` = 永不释放）；工作区就地搬迁仍要求无 live 会话。**归档释放**复用同一条 `releaseAll`（cause `archived`）：触发源是 `workspace` 领域写入的 `archivedSessionIds` 新增差集，`workspace/session-activity` / `session-stop` 只负责宿主的停止确认；busy 由 `turn/end` 等事件再 drain，**严禁**轮询。→ [protocol.md §5](./AGENTS/protocol.md)
+23. **轮次何时结束由 agent 决定，强制定稿恰有两条**：`turn/end` 正常只在 `session/prompt` 响应返回时发出（响应后隔一个宏任务补读已到 transcript 的尾部再收口，拆除清掉排队收口、不补第二帧）；`/acp` 与聊天面共用同一个 prompt slot（`beginTurn` / `claimTurn`）：`/acp` 在飞时聊天面回 `turn_in_flight`，同一聊天会话自己的回在飞时新用户消息是宿主插话、按插话语义取消后重发（`reclaimChatPrompt`，见 [protocol.md §6](./AGENTS/protocol.md)），**严禁**绕过槽位直接发 prompt；受控的强制定稿只有 cancel 后的 `armCancelFallback`（约束 12）与无活动看门狗 `TurnWatchdogService.reapStalledTurns`——会话 running 且未关闭 / 未释放、无待答审批、段开着、agent 静默超过 `turnStallMs`（有在飞 `activeToolCalls` 用更长的 `turnStallToolMs`；`turnStallMs: 0` 关掉整个看门狗）时开火，带世代守卫只收口一次并广播一条 notice。另有两条 ambient 家族的**延后收口**受控例外：被并入 CodeBuddy 后台 drain 的回合（`awaitingAmbient`）等 drain 沉默 / 到硬上限才收口；派了 detached worker 的回合（`dispatches`）在**全部** dispatch 报完前没有 quiet 窗口，只有**滚动静默窗**（`backgroundTaskMaxMs` 为短档，每条 dispatch / worker 更新续期；worker 最后状态是未闭合 tool call（`parentToolCallId` 更新）时换长档 `backgroundTaskToolMs`（默认 40 分钟，`0` = 回落短档；未闭合的 worker 工具调用在默认模式下改用 `backgroundOpenToolCeilingMs`（默认 120 分钟），超过按卡死允许空闲释放）；另有可选整段绝对上限 `backgroundTaskCeilingMs`，默认 `0` = 不限），drain 起后同用 ambient 窗口（完成帧无 `_meta`，按 callId 认；`isBackground` 才是 detached 证据，`parentToolCallId` 只证 worker 活着（同步子代理也带，不据此 hold））。两者都只作用于这一轮、绝不杀进程，不算第三种通用看门狗（→ [protocol.md §6.2 / §6.3](./AGENTS/protocol.md)）。**开火只收口 turn、绝不杀进程**：杀进程只在下一条消息的 `prepareStalledSession`——同 agent 还有别的活跃工作则拒绝本轮，支持 `session/load` 走 `releaseAll` + resume，不支持则 `forceReset`（`/acp` 报 `session_reset`，上下文已丢）；首轮零可见产出则回滚锁并说明该轮已丢弃、下一条消息新建 ACP 会话。**严禁**再加第三种按空闲计时的强制定稿；正常结束却零可见产出必须发一条告警文本。→ [protocol.md §6.1](./AGENTS/protocol.md)
+26. **启动命令是一整条命令行；Windows 生成壳必须经 `cmd.exe`**：`codebuddy --acp` 整条粘贴是正确用法；`.cmd` 壳严禁直接 spawn（`EINVAL`），走 `windowsShimLaunch`（`cmd.exe /d /s /c` + `windowsVerbatimArguments` + 外层引号）；回收走 `killProcessTree`。→ [protocol.md §7](./AGENTS/protocol.md)
+29. **ACP 下发的数据不许静默丢弃**：每种 `session/update` kind 都要有去处；`content` / `rawInput` / `arguments` 的字符串、对象、数组都算有值；diff 同时保留结构与文本；超限只截断且留标记；无卡片的通知每种类一行、变了才重发。→ [protocol.md §8](./AGENTS/protocol.md)
+
+### 权限（13–15、40）
+
+13. **审批只有一条管线：插件自己接住每一问并广播 `permission/request`**：`handlePermissionRequest` 建 `PermissionLedger` 条目（`auto` + `0` 到达即收场：不建条目、不发帧），**严禁再走宿主 `ctx.approval`，也不读宿主 approval policy**——旧路由会收下问题却不渲染，默认 `wait` 又没有期限，turn 就挂在完全不可见的地方。到点**就地收场**：`abort` 拒绝 / `auto` 按 option **kind 优先级**代答（挑不出合法选项则降级 `abort`）/ `wait`（**默认**）不设期限。
+    只有一个等待窗口 `permissionTimeoutMs`（默认 300s；`0` = 不等待，**只属 `auto`**；`abort` 的 0 抬到 30s）；模式与窗口在询问开始时读一次；`ui/approval-deadlines` 热改，覆盖落 `agents.json` 的 `approvalDeadlines` 并压过 `cordis.patch.yml`。到点留痕**恰一条** `agent/notice` + `permission/expired`（再一条 `permission/resolved`）；SSE 连接按快照用同一个 `permissionRequestFrame` 重放未决项（字段逐字节一致）+ `permission/synced`；`signal` 撤回、`session/cancel`、`closeSession`（await `session/close` **之前**）都必须 `settlePermissions`。→ [permissions.md](./AGENTS/permissions.md) / [retired.md](./AGENTS/retired.md)
+14. **审批 UI 归对话，设置页只做镜像与配置**：`PermissionDock` 挂 `conversation.input.dock`，按 `dshSessionId` 过滤、与 composer 卡同宽居中、选项原样原序（含 Always Allow）、单独取消键答 `cancelled`、没有全局 Enter/Esc、按到达顺序堆叠并由 CSS 限高；设置页只要 `ui.permissions` 非空就渲染可答复的跨会话镜像（没有聊天身份的询问只有这里能答），**没有权限策略开关**。时限卡只有两个控件（三档互斥按钮整宽不折行 + 一根时长滑块）并有一句话说成一套：「不等待」只在 `auto`、`abort` 从 30 秒起、`wait` 不画滑块读数「一直等待」；覆盖事实挂被覆盖的那一行、重置只有真覆盖才出现；agent mode 控件在 `conversation.input.left`，不写可见标签、选项不依赖活会话、自带 ACP 闸门；agent 卡详情常挂载、工作区保存语义固定（机制细节见 [permissions.md §2.4](./AGENTS/permissions.md) / [ui-panel.md §8](./AGENTS/ui-panel.md) / [ui.md §4](./AGENTS/ui.md)）。→ [permissions.md](./AGENTS/permissions.md) / [conversation-dock.md](./AGENTS/conversation-dock.md)
+15. **【裁决部分已退役】工作区即侧栏路径**：聊天会话的 `session/new` / `session/load` cwd 与子进程 `spawnCwd` 都必须是 DSH 会话自己的工作区，并以 `extraRoots` 传入（create 与 resume 都要）；prompt 严格等于用户文本、不叙述任何边界；agent 的 mode 只经 `session/chat-list` / `chat-mode-set` 与 `agent/catalog` 上报；DSH Access mode 裁决整条已删除。→ [architecture.md §4](./AGENTS/architecture.md) / [retired.md](./AGENTS/retired.md)
+40. **acp_delegate 是宿主原生子代理链的一次性外部激活（异步），不是子会话**：插件经 `ctx.subagents.registerProvider` 注册 ACP provider（name `acp`、能力全 false、无 `prepareContinuable`），execute 预校验（`service.resolve`）后 `startActivation(delivery:'parent')` 立激活并**立即返回 name**（同步返回+目录行不可兼得），答复经宿主结算通知送达父会话；目录/结算/中断归宿主单一事实源，插件**不自写** `subagents/record`·`subagent/catalog`（「不双写」=不平行双写）；`interrupt_agent` 可终结、不可续聊、`list_agents` 不列、共享每根 8 容量槽满则拒绝（明示错误）；agentId 与显式模型/等级/模式经 label 编码路由（`delegateLabel`/`agentIdFromDelegateLabel`/`delegateChoicesFromLabel` 纯函数族钉死，配置默认不进 label）；注册 `when=excludesNtr`（零污染）、guidance 三档兼注册开关（off 不注册 / on 基础 / enhanced 前置 MUST / force 经 per-agent `tools.restrict({deny})` 遮 `subagent`·`subagent_fork`·`workflow`、控制面保留、restrict 不可用降级 enhanced 并如实上报）、`timeoutMs` 静默窗（默认 40min，1s–24h；native 内置 24h 绝对兜底计时器，legacy 仍宿主工具预算）/ guidance 与 roster（`agentDefaults` 含 description）变更重注册，`defaultAgent` 不重注册、权限恒 auto{auto,0,preferOnce}（会话级接缝，bridge 字段不碰、主会话审批不改）、hub 增量折叠喂 result（seq 去重、跳 `parentToolCallId`、完整累加）；**`acp_release` 与 `acp_delegate` 共用同一注册生命周期**（guidance off 一并摘除；只跑空闲释放规则，绝不打断回合、不可恢复的会话跳过）；schema 的 `agent` 参数携带 per-agent 描述与委派默认（`agentDefaults` 新增可选 `description`，≤300 字、空值不落盘，改动经 roster digest 重注册）；**四轴定制**（agent/模型/思考等级/模式）：取值链工具参数 > 子代理设置默认 > 进程自身默认，设置四键（`guidance`/`timeoutMs`/`defaultAgent`/`agentDefaults`）热生效；配置失效静默降级+恰一条留痕（结算 notes+日志），显式 agent/模型/模式失效立即报错、等级永不致命，校验恒以运行时活选项为准，兜底绝不改写持久化配置（细节 [state.md §1](./AGENTS/state.md)/[protocol.md §1](./AGENTS/protocol.md)/[ui-panel.md §8](./AGENTS/ui-panel.md)）；`ctx.get('subagents')` 缺席回落 legacy 同步壳（行为不变，描述文案两壳同步改写）；cwd 围栏拒绝走结算 error 为有意裁决（围栏在 startSession 管线，不预拦）。→ [architecture.md](./AGENTS/architecture.md) / [permissions.md](./AGENTS/permissions.md) / [ui-panel.md](./AGENTS/ui-panel.md) / [state.md](./AGENTS/state.md) / [protocol.md](./AGENTS/protocol.md) / [host.md](./AGENTS/host.md)
+
+### 转发、preset 与绑定（16–17、22）
+
+16. **只转发人说的话**：`selectForwardPrompt` 按 `message.source.kind === 'user'` 挑消息，**严禁**「最后一条 user 消息」（注入内容折在用户消息之后）；注入唤醒轮不发 NTR 轮次；`purpose !== undefined` 在 `getOrCreateDshSession` 之前就地处理：`session-title` 把请求自带 JSON 数组（宿主 `dsh-session-title-llm` 提示词）的首条人类消息折回占位标题（设置开关默认开，加 `[NTR]` 前缀），不发 ACP 轮次（解析失败仍 `unsupported_purpose`；宿主自己的文本兜底在部分版本不生效，issue #11）；其余 purpose（compaction 等）一律 `unsupported_purpose` 失败。→ [architecture.md §2.1](./AGENTS/architecture.md)
+17. **【裁决部分已退役】NTR 模式 = agent preset，loop 不可替换**：`persona` 不挂工具 / 项目指令 / compaction；`agent/pre-step` 只保留 `user` / `tool` / 无 source 三类消息（**白名单，严禁改回按种类列黑名单剥离**：宿主每版都新增注入种类，漏一个就在续跑步批次里留下残渣，被闸门拒成 `turn/end blocked`），续跑步一律放行、由 adapter 的 `isAcpToolContinuation` 决定续读还是收口；绑定由 guard 在 `agent/inbox/inserted` / `agent/inbox/claimed`（后者在 `preStep` 取选择之前，兼收上一次进程遗留的排队输入）里用 `agent.model.select()` 记成会话模型选择，老宿主（无 `agent.model`）才用 `agent/request` 改写。**严禁** `ctx.agents.setFactory` 替换 loop，**严禁**声称 preset 能屏蔽非 ACP 模型；「是否 NTR」读会话日志 preset，**严禁**自建标记位；一切事务状态收敛成单一显式字符串字面量联合（禁 `enum`），**严禁**用多个独立布尔 / 集合靠时序推断、**严禁**同一真相双写无断言，迁移只走命名纯函数——多布尔靠时序推断会把状态隐式化、恢复漏态。→ [architecture.md §5](./AGENTS/architecture.md) / [retired.md](./AGENTS/retired.md) / [state.md · 状态表示纪律](./AGENTS/state.md)
+22. **【默认模型守卫已退役】插件只写自己的绑定、会话路由选择与默认 agent**：`defaultAgentId` 是插件私有状态，删 agent 必须清空；`session/chat-*` 只写插件映射；guard 经 `agent.model.select()` 把绑定记成该会话的模型选择（直写 agent 的 selection 投影，**不是** `session/selectModel` RPC，不读模型目录、不写全局默认模型、不广告模型）；老宿主才回落 `agent/request` 改写。→ [architecture.md §3、§6](./AGENTS/architecture.md) / [retired.md](./AGENTS/retired.md)
+
+### 界面（18、20、30、33、34、38、39）
+
+18. **对话内的 NTR 面只借显示层**：模型 / 思考等级 / 额外 config options 读 `agent/catalog`；会话由哪个 agent 服务读插件绑定 `routeAgentId`（无答案时**严禁**用 `agents[0]` 填名字）；写入只走 `bindChatAgent` / `setChatSessionModel` / `setChatSessionEffort` / `setChatSessionConfig`，**严禁** `directory.select` / `selectModel`。cluster 顺序固定 `高级 → model → thought → agent`（首轮前 agent 底座是右端锚点、不能被挤没）；picker 一行一个模型值、勾中的行必须写模型名；NTR 视图只读 `session/chat-transcript`，空状态区分「没服务过」与「ACP 会话没了」；**新增任何 ACP 专属槽位条目前的铁律**：先回答「非 NTR 会话里这个槽位归谁」——答案必须是 DSH 原生条目；**会替换或常驻改变原生面的条目**（`single` / `keyed` 座位，以及投影进每条会话的 `list` 槽如 `conversation.view` / `conversation.composer.dock`；dock 的 `activity` 按 **id** claim 并渲染回宿主组件）只准走 gate claim / `syncAcpMode` 动态挂卸，**严禁**无条件注册；纯附加的事务条目（`conversation.input.dock` 的权限卡 / 释放横幅 / 限流横幅、`assistant-actions` 分支键）必须自门禁到「本会话确有该事务」，无数据不渲染，且不得遮蔽原生条目；组件里的 `return null` 只是最后防线，**不能当隔离**；非 NTR 会话的 NTR 页签 / 底部环必须不存在，原生模型、权限、上下文统计与 agent 控件必须原样可见；空 roster 下底座不消失，`agentsLoaded` 之前不得把「未读取」当「未配置」。→ [ui.md](./AGENTS/ui.md)
+20. **【竞争式遮蔽已退役】座位靠 claim 接管，失败一律放开**：`createModelSeatClaim` 用 `entriesOfSlot` 核实 head，不中就有界重注册（`MAX_SEAT_CLAIMS`），注册经 `ctx.slots.inject`；只读舞台会话 `agentPreset === ACP_PRESET_ID`，切走即撤；舞台会话优先取宿主当前选择（`uiSession.adapter.current`），列表 `retainedBy.mainView` 只作无 scope adapter 的兜底；`stagedSessionOf` / `rowAgentPreset` 兼容两代快照；任何不确定都回到原生座位；`ACP_PRESET_ID` 三处同步。→ [ui.md §1](./AGENTS/ui.md) / [retired.md](./AGENTS/retired.md)
+30. **NTR 会话的 `/` 属于 agent**：只列 agent 自己的命令与技能清单（命令经 `available_commands_update`，技能经 `agent/skills` 按风味扫文件系统），Enter 不被宿主认领，选中只插回草稿（技能行插入定稿的 `use /token [Skill Path](…)` 文本）；实现只能运行时包装活的 `/` 来源（`slash-isolation.ts`），**严禁**注册第二个来源或替换 composer；命令与技能各由一个来源承载、同源冲突时 command 优先；没有证据时 fail-open；命令声明按 agent 缓存进 `model-catalog.json` 供首条消息前使用。→ [ui.md §6](./AGENTS/ui.md) / [state.md §6](./AGENTS/state.md)
+33. **设置页文案有预算上限**：一个控件的说明一行讲完，机制解释进代码注释与 `AGENTS/`，不进 UI；覆盖事实**必须看得见**——`configured[key]` 挂被覆盖的那一行、用警告色、不与其它灰色小字同层；重置按钮只有真的覆盖了才出现；文案里点名的控件名必须与可见标题一致。→ [ui-panel.md §8](./AGENTS/ui-panel.md) / [permissions.md §2.4](./AGENTS/permissions.md)
+34. **界面颜色只走宿主 alias token，写死颜色只能出现在 `var()` fallback**：主题归宿主，插件不维护 JS 主题状态，**严禁**自写 `color-scheme: light dark`；状态色按宿主配对（`state-*-tertiary` 底 / `state-*-primary` 前景、diff 行 `file-diff-*-bg`、danger hover `interactive-bg-hover-danger`）；宿主没有 `--dsw-alias-text-*` / `button-primary-invert` / `font-mono`，分别用 `label-*` / `label-primary-foreground` / `--ds-font-family-code`。→ [ui-panel.md §11](./AGENTS/ui-panel.md)
+38. **运行消息进日志，页顶横幅走全局浮层**：`agent/notice` 与会话释放只进设置页「日志」分区（浏览器内存、追加序、最多 200 条、刷新清空、未读圆点、空闲释放不记）；设置页自身动作失败留在页头 `notice`，保存横幅由 `SaveGuardToast` 挂在 `shell.overlay`——固定浮层、`top: 16px`、水平居中、最大宽度沿用原值，**不嵌在设置页**；来源为保存 / 热重载终态（`save-failed` / `save-expired` / `save-rejected` / `save-partial` / `save-succeeded` + `hmr-delay`，热重载延迟**不是保存终态**），加取消 / 重试手势反馈行（`save-cancel-failed` / `save-cancelled` / `save-retry-none` / `save-retry-failed` / `agent-deleted`）；只有 `gateAvailable === true` 的 `save/status` 快照可信，缺字段归一为 false；失败行常驻到用户关闭且不因数量丢弃，成功行最多一条、短暂自动消失，同一帧多个保存成功合成一条并列出保存的 agent 名（超过 3 个只列前 3 个并写「等 N 个」），保存成功日志仍逐条带 label；失败超过 6 条折叠为「还有 N 条失败」可展开，折叠控件在失败行之前；堆栈限高 `calc(100vh - 32px)` 并可滚动；Escape 页面级监听关最新一条，焦点在输入框 / 文本域时不拦截；重试不可用不回落全局强制保存，以 `save-retry-none` 回执替换该行；关闭记录按 `banner.key` → `banner.at` 存 `sessionStorage`，只对门禁 `failed` / `expired` 行跨刷新生效。→ [ui-panel.md §8](./AGENTS/ui-panel.md) / [state.md §9](./AGENTS/state.md)
+39. **NTR 会话的消息动作归插件**：宿主点赞/点踩/分支三图标只经 `html[data-ntr-acp]` 作用域 + `aria-label` 选择器隐藏（锚点 `[data-turn-tail]`，无 data-* 钩子可依赖），**严禁**覆盖 `conversation.chat.node` 渲染；自绘分支入口注册 `conversation.chat.assistant-actions`（`data-ntr-branch` 豁免、六态 `forkStateOf`、notTail 读宿主 `data-actions-reveal` fail-closed）；分叉固定「宿主 sessions.fork → 插件 session/chat-fork-adopt」两段、失败 all-or-nothing 进横幅；fork 能力位只读「活的 initialize 优先、model-catalog.json 最后已知兜底」。→ [ui.md §12](./AGENTS/ui.md) / [protocol.md §1](./AGENTS/protocol.md)
+
+### 宿主接线、路径与依赖（24、25、31）
+
+24. **路径判定与比较必须走跨平台原语**：绝对路径用 `isAbsolutePath`（盘符 / UNC / `//host/share`；`\\?\` 不算，报「cannot resolve」而非「does not exist」）；containment 用 `isUnderPath`（win32 折叠分隔符与大小写，POSIX 字节精确）；浏览器用 `isAbsolutePathLike` 手拷贝并做等价测试；**严禁**新增 `startsWith('/')` 类假设。→ [paths.md](./AGENTS/paths.md)
+25. **`/acp` 必须用 owner 显式的 `connection.register`**：`rpc.handle` 在 0.1.7-rc.x 桌面 composition 上抛 `cannot get property "webServer" without inject`，导致所有 `POST /acp/*` 变 HTTP 405；`register` 缺失或抛错才回落 `rpc.handle`；信封协议与鉴权仍由 Connection 实现。→ [host.md §1](./AGENTS/host.md)
+31. **ACP SDK 的 `zod` peer 必须是直接依赖**：SDK 入口加载时就会 `import` `zod`，而宿主 profile 的 pnpm 可能设 `autoInstallPeers: false`；`zod` 必须留在 `dependencies`，范围与 SDK 的 peer 一致（`^3.25.0 || ^4.0.0`）。→ [README.md](./README.md)
+
+### 发版、用量与内置更新（35、36、37）
+
+35. **CHANGELOG 只记确定性的净改动，严禁日常提交修改**：日常任务只在 Commit 正文写明面向用户的动机与影响，严禁改写 `CHANGELOG.md`；CHANGELOG 统一在发版时由发版流程提取提交区间，同一功能或 bug 的多次微调合并为一条净改动（去噪、避免流水账），挂引入它的核心提交链接；与 GitHub release note 同一套话（中英双版、中文在前、`---` 分隔），只写最终可见行为，不写旧行为对照与中间形态。→ [release.md](./AGENTS/release.md)
+36. **`usage_update` 是上下文占用，不是请求 token**：`used` / `size` 只写 `session.usage`（ACP 视图与 composer 占用环的 `used/size`，实时落点见 [ui.md §4.1](./AGENTS/ui.md)）；原生聊天流的 `usage` 块只能是按段估算的输出 token（正文 + 思考字符 ÷4，`inputTokens: 0`），**严禁**把 `size` / `used` 映射成 input/output（宿主的原生 ContextMeter 也不吃这条数据）；缓存命中率无数据源，工具参数不计入估算；插件 burst tok/s（`turn/metrics` / `session.burst`）只供同 id `activity` 影子显示，**严禁**回写 `usage` 或另开第二处读数。**成本帧不是读数**：`size <= 0` 的 `usage_update`（CodeBuddy 后台 team member 的 `used: 0, size: 0` + cost）只并 `cost`、保留上次 `used/size`（`src/usage.ts` · `mergeUsageSample`），浏览器 `usageFromUpdate` 与 `isPersistedUsage` 同样拒收——否则占用环会在等待后台子智能体期间消失，并把 0/0 落盘。→ [protocol.md §8](./AGENTS/protocol.md)
+37. **内置更新只转述宿主的安装，绝不自己下载 / 替换 / 重启**：`plugin/update-check` 与 `plugin/update-apply`（只收精确且高于运行版本的 `x.y.z`）都回 `PluginUpdateState`，实现是 `src/update.ts` 的 `UpdateService`；check / apply 的数据源只有 `ctx.get('pluginManager')` 的 `listBundles()` / `registries()` 与直接 GET packument；安装与回滚只调 `installBundle('dsh-ntr@<version>', { enabled: true, registry? })`（HMR 下按宿主原生更新语义先 `removeBundle` 再重试，失败先 remove 再回滚）——**不是自替换**：文件操作全由 pluginManager 完成，且必须由人点击触发。
+    资格**正向判定 registry spec**：按最后一个 `@` 拆开、只判 spec 半边；裸 `x.y.z` / 范围 / `*`·`x` / dist-tag 才可更新，含 `:` / `/` / `\` 或以 `.` 开头一律 `source-install` 永不升级；无 pluginManager / 缺方法 / 旧宿主不报 `source` → `unsupported`；`readOnlyReason` 或 `removable === false` → `managed`；磁盘版本经 `compareVersions` ≠ 运行版本 → `restart-required`（不冒充 latest）。
+    check **不因对话在跑而 `busy`**（只有 apply 查 `BridgeManager.hasActiveTurns`）；`applied` / `restart-required` 为成功，`overridden` / `cancelled` / 带 error / 未知 `application` 一律 `failed`，错误正文优先 `error.diagnostic`；只读的 `plugin/release-notes`（`{ version, refresh? }`）另走 GitHub Release / tag 版 CHANGELOG，回 `PluginReleaseNotes`（发布页 URL + 原始双语正文；仅预览，不安装、不参与 check），按需拉取；检查随设置页自动（10 分钟节流 + in-flight 去重），**安装必须人手点击**；**严禁**把 `pluginManager` 写进顶层 `inject`。→ [state.md §8](./AGENTS/state.md) / [ui-panel.md §8.1](./AGENTS/ui-panel.md)
+
+## 边界与禁区
+
+- **禁止修改 [`lib/`](./lib)**：构建产物，`npm run build` 全量覆盖，CI 自己 build，不提交。
+- **禁止在 [`tsdown.config.mjs`](./tsdown.config.mjs) 取消 external**：`react`、`react-dom`、`react/jsx-runtime`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-ui-slots` 必须由运行时提供，打包进去会破坏 context。
+- **子进程环境按「同级 agent」处理**：默认继承完整宿主环境，再由 agent 自己的 `env` 按键覆盖（`src/impl.ts` · `childEnv`）。**严禁**重新引入隐式凭据过滤——依赖环境变量认证的 agent（如 pi 的自定义供应商）会静默丢掉整个供应商；将来要最小权限必须做成显式 per-agent 开关。
+- **模块纯度**：`src/protocol.ts` 是契约桶（只有再导出），契约本体按簇在 `src/protocol/`，两者都只准纯类型 / 纯常量 / 纯函数，**严禁**引入 Node 专属库、有副作用的运行时代码或 ACP SDK 运行时值；`src/impl.ts` 是纯逻辑桶（只有再导出），逻辑本体按簇在 `src/impl/`，两者都**严禁** Node 内置模块与 SDK，必须由 `tests/impl/` 覆盖；`src/client/` **严禁** Node 内置模块或 ACP SDK，通信只走 RPC / SSE。
+- **文件行数棘轮门禁**：`npm run check:size`（prepack 第一道）硬卡——新文件 ≤1000 行；存量超限文件锁在 [file-size-baseline.json](./scripts/file-size-baseline.json) 的当前行数，只许缩不许长（缩到 ≤1000 即删条目），**严禁**新增条目或抬线；单文件超 500 行或单次会话净增 200 行，收尾必须向用户报告行数与增长原因。
+
+## 常见任务配方
+
+- **新增 / 修改 ACP RPC**：`src/protocol/` 对应簇加契约（`src/protocol.ts` 只是桶，新符号要同时补进它的再导出块）→ `src/impl/dispatch.ts` 加进 `AcpManager` 并在 `dispatchRpc` 路由 + 校验（新符号同时补进 `src/impl.ts` 桶的再导出块）→ `src/bridge/` 实现调度 → `src/client/store.ts` 加调用并测状态流转。验证：`npx vitest run tests/impl tests/store.spec.ts`。
+- **改 UI 与挂载槽位**：`panel.tsx`（内部组件簇在 `panel/`）/ `session-controls.tsx` / `acp-view.tsx` / `permission-dock.tsx` 改组件 → `src/client/index.tsx` 经 `ctx.slots.inject` 管理注册（槽位清单见文件头注释）→ `npx tsdown` 验证 bundle。
+- **扩展配置字段**：`AcpAgentDef` / `AcpPluginConfig`（src/protocol/agent-def.ts）→ `validateAgentDef`（会重建对象，新字段必须纳入且 optional）→ `AgentSavePayload` + panel 的 `initialForm` / `buildPayload` / `payloadEquals`（同在 `src/client/panel/form.ts`）三处同步 → `cordis.patch.yml`。**宿主只校验不改形状**，否则设置页永远判脏、每次保存都重启 agent。
+
+## 测试约定
+
+测试在 [`tests/`](./tests)，`.spec.ts` 命名；其余按模块就近（`tests/panel/` 设置页、`update.spec.ts` 更新服务、`acp-guard.spec.ts` preset guard 的步进闸门与路由选择），浏览器侧共享纯逻辑放 `acp-view.spec.ts`，组件 / 模块专属用例就近放同名 `.spec.tsx`（如 `release-notes.spec.tsx`），不要塞进 `tests/impl/`（宿主端纯逻辑镜像）——按簇落同名文件。
+
+- `tests/impl/`：宿主端纯逻辑单测按 `src/impl/` 的簇同名镜像（`validate.spec.ts` / `catalog.spec.ts` / `paths.spec.ts` / `dispatch.spec.ts` …，共享 fake 在 `harness.ts`），无子进程，秒级返回。
+- `register.spec.ts`：Cordis 上下文注册，用 `fakeCtx()` 模拟宿主。
+- `store.spec.ts`：前端状态机（`AcpStore` 类）；纯函数 / 类型的用例按 `src/client/store/` 的簇同名镜像进 `tests/store/`（`blocks.spec.ts` / `fork.spec.ts` / `save-gate.spec.ts` …），describe 标题与用例数随簇迁移不变。
+- `tests/panel/`：设置页用例按 `src/client/panel/` 的簇镜像（`editing.spec.ts` / `save-guard.spec.ts` / `permissions.spec.ts` …，共享 fake 在 `harness.ts`），describe 标题与用例数随簇迁移不变。
+- `bridge.spec.ts` + `tests/bridge/*.spec.ts`：集成测试，用真实子进程跑 `tests/mock-agent.mjs` 验证 stdio ACP 全链路；共享 harness 在 `tests/bridge/harness.ts`。
+- `acp-view.spec.ts`：浏览器半区纯函数（diff / 空状态 / codec / 路径等价 / 审批期限事实）。
+- `session-controls.spec.ts`：composer 芯片与菜单**说了什么**（`agentBaseChip` / `describeRoute` / `menuFor`）。
+- `model-seat.spec.ts`：座位 claim 与 ACP gate 的装 / 撤 / 重取（含 `conversation.view` / `conversation.composer.dock` 的 ACP-only 动态注册）。
+- `slash-isolation.spec.ts`：斜杠来源包装与 fail-open。
+
+## 按需文档索引（`AGENTS/`）
+
+| 文档 | 何时读取 | 何时维护 |
+|---|---|---|
+| [architecture.md](./AGENTS/architecture.md) | 改消息走向、会话绑定、工作区、preset 外壳、agent 锁定、默认 agent，或要目录 / 术语索引 | 动了 `src/bridge/manager.ts` 的 `streamPrompt` / 绑定 / 锁定、`presets/acp/acp-guard.mjs`、`acp_delegate` 宿主工具委派、或新增顶层源文件 |
+| [protocol.md](./AGENTS/protocol.md) | 改子进程、超时、取消、卡死收口（无活动看门狗）、崩溃恢复、空闲释放、启动命令、会话分叉、ACP 数据折叠 | 动 `AgentBridge` / `BridgeManager` / `TurnStreamController` 的生命周期、超时、`session/update` 折叠逻辑或 `ui/delegate` |
+| [subagent-adapters.md](./AGENTS/subagent-adapters.md) | 给新 agent 接子代理事实源，或查 per-agent 适配接缝与抽取触发器 | 新增 per-agent 接缝，或动共享子代理管线（`hasPendingBackgroundWork` / `subagentsDetail` / 明细门禁 / `LiveSession` 状态） |
+| [ui.md](./AGENTS/ui.md) / [conversation-dock.md](./AGENTS/conversation-dock.md) | 改 composer 座位 / 芯片 / 挂牌、mode 控件、NTR 视图、斜杠菜单、消息动作 / 分支按钮；对话内权限卡 / 释放横幅 / 限流横幅读后者 | 动 `src/client/` 的槽位注册、菜单内容或对话面组件 |
+| [ui-panel.md](./AGENTS/ui-panel.md) | 改设置页布局、保存横幅、版本徽标 / 内置更新卡、文案或主题色 | 动 `panel.tsx` / `panel/`（含「子代理」页）、`save-guard-toast.tsx`、`locale.*` 或 CSS token |
+| [permissions.md](./AGENTS/permissions.md) | 改权限映射、审批卡片（对话 dock / 设置镜像）、审批时限、权限座位、fs 围栏 | 动 `handlePermissionRequest` / `PermissionLedger` / 期限配置 / `PermissionDock` / 委派会话级策略接缝（`permissionPolicy` / `preferOnce`） |
+| [state.md](./AGENTS/state.md) | 改落盘、会话选择持久化、模型目录 / 可见性、命令缓存、fork 能力位、内置更新、保存门禁 / HMR 防护 | 动 `agents.json` 结构（含 `delegate` 键）、`agent/catalog`、`absorbCommands`、`AcpSaveGate`、`hmr-guard`、`UpdateService` 或 `applyDelegateTuning` |
+| [host.md](./AGENTS/host.md) | 改宿主接线（通道 / preset / 服务 / 模型 abstain），或**宿主升级后 NTR 报错 / 异常：先读 §5 排查** | 动 `src/index.ts`、`presets/acp/acp.patch.yml`、`package.json` 的 `dsh` 字段；每次因宿主升级做兼容修复后补 §5.2 症状行 |
+| [paths.md](./AGENTS/paths.md) | 改任何路径判定 / 比较 / 规范化，或 Windows 上遇到 `bad_cwd` / `cwd_denied` | 动 `isAbsolutePath` / `isUnderPath` / `canonicalizeFsPath` 或浏览器 `isAbsolutePathLike` |
+| [retired.md](./AGENTS/retired.md) | 想恢复某个旧机制、看到幽灵符号，或不确定某符号是否已删 | 又退役一条轴时，把旧符号追加进幽灵清单 |
+| [release.md](./AGENTS/release.md) | 发版：更新 CHANGELOG、bump 版本、打 tag、npm 发布、写 GitHub release note | 发布流程、版本规则或 CHANGELOG 口径变化 |
+
+历史推导与实测日志：[acp-convergence.md](./docs/acp-convergence.md)、[acp-mode.md](./docs/acp-mode.md)、[acp-permission-and-sandbox.md](./docs/acp-permission-and-sandbox.md)。待办：[docs/todo.md](./docs/todo.md)（本仓唯一待办清单）。宿主机制见 [dsh-plugin-development-guide.md](./docs/dsh-plugin-development-guide.md)；依赖版本看 `package.json`，TS 选项看 `tsconfig.json`，ACP 规范查 `node_modules/@agentclientprotocol/sdk` 的类型定义。文档不记「某年某月修过什么」——版本净改动进 `CHANGELOG.md`（约束 35），推导进上述收敛记录；JSX / CSS 细节直接看实现文件。
+
+## Git 提交
+
+Conventional Commits，英文，正文写动机与影响：`feat(acp):` / `fix(update):` / `chore(release):` / `docs(release):`；改本文件或 `AGENTS/` 下任何文档的提交统一用 `docs(agents):` 前缀；`lib/` 是构建产物，不提交。
+- **通过验收即可自行提交**：代码改动通过 `npm run prepack`、独立上下文审核通过、审核提出的必修项已修（修复类改动附变异验证），且只暂存本任务文件时，直接提交，不再逐次征求用户同意；缺任一条就停在「已修复待确认」。纯文档改动以行数门禁与 diff 自查代替 prepack。前缀按上一条判定。
+
+## 文档维护纪律
+
+1. **先过筛，再落笔。** 只有"不知道就会写出错误代码"的信息准进本文件；其余一律写进 `AGENTS/` 并在上方索引登记触发条件。
+2. **先改写，后新增。** 要加的东西先在现有条目里找落点：能改写的就改写，能替代的就删旧加新，确认是全新约束才新增。因事故或复盘新增的硬性规则不受此限，但加完必须在同一次改动里把等量旧内容外置到 `AGENTS/`。单次会话净增超过 10 行，收尾时逐条说明它为什么必须常驻本文件。本文件超过 150 行立刻外置，不许放宽上限。
+3. **改代码就同提交改文档。** 动了 `AGENTS/` 里某份文档所描述的代码，同一个提交里更新那份文档；上方索引的"何时维护"列写什么就做什么。
+4. **会话收尾必须报告。** 本次会话改过本文件或 `AGENTS/` 下任何文档，收尾时报告四件事：改了哪几份、行数变化、是否触发拆分阈值（单篇 >200 行 / 同主题 ≥3 篇 / 索引条目 >12 条）、孤儿文档与失效索引是否已清理。没改就不用报。
+5. **见到垃圾当场修。** 不在任何索引中的 `AGENTS/` 文档、索引里指向不存在路径的条目，当场修掉，不许记成待办。
+6. **不许删本段来省行数。** 本段同样适用上面五条；绕过它，就是把这份文件的下一次膨胀留给下一个会话。

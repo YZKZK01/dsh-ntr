@@ -1,0 +1,667 @@
+/**
+ * The composer's ACP cluster: what the agent base chip claims, what the model
+ * picker says about a model that is not on offer, what the thought-level picker
+ * calls its "follow the default" row, and what the agent-mode tooltip says about
+ * the host's Access mode. Also: an empty agent roster keeps the base and offers
+ * the way into NTR settings.
+ *
+ * These are the audit's text/behavior mismatches in this area (F5, F25, F26,
+ * F27, F43): a chip that named an agent no request path would ever use, a picker
+ * row that blamed one cause for a condition with two, a tooltip promising a menu
+ * the agent base no longer holds, a "provider default" row on an axis no
+ * provider participates in, and a "complementary to the Access mode" tooltip on
+ * a control that only exists where the Access mode is hidden.
+ *
+ * No DOM: the pure model builders are the seam, exactly as tests/acp-view.spec.ts
+ * uses them (that file owns the picker's row/label shape; this one owns what the
+ * words claim).
+ */
+
+import { describe, expect, it } from 'vitest'
+import { agentModeTitle, agentModeVisible, modeInForce } from '../src/client/composer-mode.tsx'
+import {
+  acpSettingsDialogIsOpen,
+  closeAcpSettingsDialog,
+  openAcpSettingsDialog,
+} from '../src/client/acp-ui.tsx'
+import {
+  advancedOptions,
+  agentBaseChip,
+  agentBaseHasData,
+  agentBaseHidden,
+  agentTagChip,
+  agentTagAlive,
+  agentTagHaloPresentation,
+  agentTagVisible,
+  describeRoute,
+  lockedAgentOf,
+  menuFor,
+  OPEN_SETTINGS_ITEM,
+  REFRESH_CATALOG_ITEM,
+} from '../src/client/session-controls.tsx'
+import { AcpStore } from '../src/client/store.ts'
+import { FETCH_THOUGHT_ITEM, thoughtChip } from '../src/client/thought-card.ts'
+import type { AcpConversationChoice, AgentCatalogResult, AgentView, ChatSessionView } from '../src/protocol.ts'
+
+describe('the agent base chip names only an agent that serves the conversation', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const other: AgentView = { ...agent, id: 'omp', title: 'Omp' }
+  const roster = [agent, other]
+  /** The conversation's own binding — the host's record of who serves it. */
+  const bound: ChatSessionView = { agentId: 'pi', agentTitle: 'Pi', sessionId: 's1', modelId: 'pi' }
+  const catalog: AgentCatalogResult = {
+    agentId: 'pi',
+    title: 'Pi',
+    base: { id: 'pi', name: 'Pi' },
+    variants: [{ id: 'pi@claude-sonnet-4', name: 'Pi · Claude Sonnet 4' }],
+    reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' },
+    probed: true,
+    updatedAt: 1,
+  }
+
+  it('is the entry point, not a borrowed name, when nothing serves the conversation', () => {
+    // No binding, no live session, no plugin default: the guard's route rewrite
+    // finds nothing and the turn runs on the deployment default provider, so the
+    // old `agents[0]` fallback put the first configured agent on a chip whose
+    // conversation no message would ever send to it (F5).
+    const route = describeRoute(roster, undefined, undefined)
+    expect(route.agentId).toBeUndefined()
+    const chip = agentBaseChip(route, false, acp)
+    expect(chip.label).toBe('选择 Agent')
+    expect(chip.title).toBe('这条会话当前没有 NTR agent 服务；点开可选择 agent')
+  })
+
+  it('names the agent when a binding, a live session or the plugin default serves it', () => {
+    // All three are names the request path uses: the host reports the binding,
+    // the live session is the agent already running, and the guard falls back to
+    // the plugin's default agent.
+    expect(describeRoute(roster, bound, undefined, catalog).agentId).toBe('pi')
+    expect(describeRoute(roster, { ...bound, released: true }, undefined, catalog).agentId).toBe('pi')
+    expect(describeRoute(roster, undefined, 'omp').agentId).toBe('omp')
+    expect(describeRoute(roster, undefined, undefined, catalog, 'omp').agentId).toBe('omp')
+    const chip = agentBaseChip(describeRoute(roster, bound, undefined, catalog), true, acp)
+    expect(chip.label).toBe('NTR · Pi')
+    expect(chip.title).toBe('这条会话由外接 NTR agent 服务；点开可切换 agent')
+  })
+
+  it('names the model and thought level for a conversation served by the plugin default', () => {
+    // A brand-new ACP conversation has no binding and no pick yet; the guard's
+    // route rewrite falls back to the plugin default, and the composer must
+    // show that agent's own surface right away instead of waiting for a manual
+    // re-pick (user report, 2026-10-24).
+    const withModel: AgentCatalogResult = {
+      ...catalog,
+      currentModel: { value: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+    }
+    const served = describeRoute(roster, undefined, 'pi', withModel)
+    expect(served).toMatchObject({
+      agentId: 'pi',
+      modelLabel: 'Claude Sonnet 4',
+      effectiveEffort: 'high',
+      effortLabel: 'High',
+    })
+    // The route is still the bare agent ("let the agent choose"); the label is
+    // the model that route currently resolves to.
+    expect(served.modelId).toBeUndefined()
+    expect(served.efforts.map(level => level.id)).toEqual(['high'])
+  })
+
+  it('promises only the roster behind the agent base', () => {
+    // The agent's models and thought levels have chips of their own (user
+    // decision, 2026-10-17); the menu behind this chip holds the agent list
+    // alone, so a tooltip offering to switch them too was false (F26).
+    const route = describeRoute(roster, bound, undefined, catalog)
+    const chip = agentBaseChip(route, true, acp)
+    expect(chip.title).toContain('切换 agent')
+    expect(chip.title).not.toContain('模型')
+    expect(chip.title).not.toContain('思考')
+    const menu = menuFor('agent', { acp, agents: roster, route })
+    expect(menu.sections.map(section => section.id)).toEqual(['agent'])
+  })
+
+  it('marks no roster row active when no agent serves the conversation', () => {
+    // Nothing is running and nothing is picked, so no row may read as current.
+    const menu = menuFor('agent', { acp, agents: roster, route: describeRoute(roster, undefined, undefined) })
+    expect(menu.sections[0]?.items.every(item => item.active !== true)).toBe(true)
+  })
+
+  it('keeps the settings action pinned on a non-empty roster', () => {
+    const menu = menuFor('agent', { acp, agents: roster, route: describeRoute(roster, bound, undefined, catalog) })
+    expect(menu.sections[0]?.items.find(item => item.id === OPEN_SETTINGS_ITEM))
+      .toMatchObject({ label: '打开 NTR 设置', pinned: true })
+  })
+})
+
+describe('an empty agent roster keeps the base and offers the settings entry', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+
+  it('waits for the host roster answer before calling the roster empty', () => {
+    // Before `agents/list` answers, `agents: []` means "not read yet". Offering
+    // the setup entry there would accuse a configured deployment on every load.
+    expect(agentBaseHasData(undefined, [], false)).toBe(false)
+    expect(agentBaseHasData(undefined, [], true)).toBe(true)
+    // A live session or a non-empty roster is evidence on its own.
+    expect(agentBaseHasData(undefined, [{ id: 'pi' } as AgentView], false)).toBe(true)
+    expect(agentBaseHasData({ agentId: 'pi', sessionId: 's1' }, [], false)).toBe(true)
+  })
+
+  it('keeps the base chip and puts the setup action inside its picker', () => {
+    const route = describeRoute([], undefined, undefined)
+    // The base still says what it always said: nothing serves this conversation.
+    expect(agentBaseChip(route, false, acp).label).toBe('选择 Agent')
+    // ...but with an empty roster the tooltip points at settings, not at a pick
+    // the menu cannot offer.
+    const emptyChip = agentBaseChip(route, false, acp, true)
+    expect(emptyChip.title).toContain('NTR 设置')
+    expect(emptyChip.title).not.toContain('可选择 agent')
+    const menu = menuFor('agent', { acp, agents: [], route })
+    const items = menu.sections[0]?.items ?? []
+    // Status first (not clickable), then the action row that opens settings.
+    expect(items.map(item => item.id)).toEqual(['none', OPEN_SETTINGS_ITEM])
+    expect(items[0]?.disabled).toBe(true)
+    expect(items[1]).toMatchObject({ label: '打开 NTR 设置' })
+    expect(items[1]?.disabled).toBeUndefined()
+  })
+
+  it('opens and closes the frame-wide settings dialog', () => {
+    closeAcpSettingsDialog()
+    expect(acpSettingsDialogIsOpen()).toBe(false)
+    openAcpSettingsDialog()
+    expect(acpSettingsDialogIsOpen()).toBe(true)
+    closeAcpSettingsDialog()
+    expect(acpSettingsDialogIsOpen()).toBe(false)
+  })
+})
+
+describe('the agent base retires after the first turn, locks the agent, and the edge tag takes over', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  /** An ACP session that proves this conversation has actually run a turn. */
+  const ran: ChatSessionView = { agentId: 'pi', agentTitle: 'Pi', sessionId: 's1' }
+
+  it('does not let the plugin default or a pre-chat pick count as a lock', () => {
+    // `lockedAgentOf` takes no default and no pick by design. A configured
+    // default or a pick made ahead of the first message is what a fresh
+    // conversation WOULD start on — not proof its context belongs to anyone
+    // yet. Counting either would hide the base before the user can change it.
+    expect(lockedAgentOf(undefined, undefined)).toBeUndefined()
+    expect(agentBaseHidden(lockedAgentOf(undefined, undefined))).toBe(false)
+  })
+
+  it('locks on the first ACP session, even without a host binding', () => {
+    expect(lockedAgentOf(undefined, ran)).toBe('pi')
+    expect(agentBaseHidden('pi')).toBe(true)
+  })
+
+  it('keeps the host lock after the session is gone', () => {
+    // The lock is persisted with the conversation, not with the process: the
+    // tag must still name the agent after a restart or an agent stop.
+    expect(lockedAgentOf('pi', undefined)).toBe('pi')
+    expect(agentBaseHidden('pi')).toBe(true)
+  })
+
+  it('ignores the roster: a deleted agent still owns the conversation context', () => {
+    // No roster check on purpose. Bringing the base back here would offer a
+    // switch the turn path has to refuse; the tag names the stale id instead.
+    const deleted: ChatSessionView = { ...ran, agentId: 'deleted', agentTitle: 'Deleted' }
+    expect(lockedAgentOf(undefined, deleted)).toBe('deleted')
+    expect(agentBaseHidden('deleted')).toBe(true)
+    // The durable host lock outranks a stale session naming another agent.
+    expect(lockedAgentOf('pi', deleted)).toBe('pi')
+  })
+
+  it('shows the tag only when the base has stood down', () => {
+    expect(agentTagVisible(true, undefined)).toBe(false) // before the first turn
+    expect(agentTagVisible(true, 'pi')).toBe(true)
+    // A lingering lock must not leak the tag into a conversation that switched
+    // back to an ordinary preset; an unanswered host verdict falls back to the
+    // lock, which itself proves ACP.
+    expect(agentTagVisible(false, 'pi')).toBe(false)
+    expect(agentTagVisible(undefined, 'pi')).toBe(true)
+  })
+
+  it('reads the tag as alive only for a live session of the tagged agent', () => {
+    // A live, unreleased session of the locked agent breathes.
+    expect(agentTagAlive(ran, 'pi')).toBe(true)
+    // Released (process gone / idle-released) turns the halo off; the tag
+    // itself stays, so the halo must not keep claiming a process that is not.
+    expect(agentTagAlive({ ...ran, released: true }, 'pi')).toBe(false)
+    // The live session must be the tagged agent's own: a view naming another
+    // agent (a stale roster entry after a delete/re-add) is not "alive".
+    expect(agentTagAlive({ ...ran, agentId: 'other' }, 'pi')).toBe(false)
+    // No session view at all (host has not answered yet): not alive.
+    expect(agentTagAlive(undefined, 'pi')).toBe(false)
+    expect(agentTagAlive(ran, undefined)).toBe(false)
+  })
+
+  it('maps the halo setting to the tag classes and the animation period', () => {
+    // Not alive: no halo classes and no CSS variable at all — a stale period
+    // could never leak into some future non-animated state.
+    expect(agentTagHaloPresentation({ mode: 'breath', speed: 'fast' }, false))
+      .toEqual({ classes: '', style: {} })
+    // Breath mode carries the period variable for the stylesheet.
+    expect(agentTagHaloPresentation({ mode: 'breath', speed: 'slow' }, true))
+      .toEqual({ classes: ' is-alive', style: { '--ntr-halo-period': '5.2s' } })
+    expect(agentTagHaloPresentation({ mode: 'breath', speed: 'normal' }, true))
+      .toEqual({ classes: ' is-alive', style: { '--ntr-halo-period': '3.2s' } })
+    expect(agentTagHaloPresentation({ mode: 'breath', speed: 'fast' }, true))
+      .toEqual({ classes: ' is-alive', style: { '--ntr-halo-period': '1.2s' } })
+    // Steady mode: constant glow, no animation, therefore no variable.
+    expect(agentTagHaloPresentation({ mode: 'steady', speed: 'normal' }, true))
+      .toEqual({ classes: ' is-alive is-steady', style: {} })
+  })
+
+  it('names the locked agent and says switching is closed', () => {
+    const tag = agentTagChip('Pi', acp)
+    expect(tag.label).toBe('NTR · Pi')
+    expect(tag.title).toContain('锁定')
+    expect(tag.title).toContain('不能切换')
+    expect(tag.title).toContain('新建会话')
+  })
+})
+
+describe('the model picker names both reasons a current model is not on offer', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const bound: ChatSessionView = { agentId: 'pi', agentTitle: 'Pi', sessionId: 's1', modelId: 'pi' }
+  const catalog: AgentCatalogResult = {
+    agentId: 'pi',
+    title: 'Pi',
+    base: { id: 'pi', name: 'Pi' },
+    variants: [{ id: 'pi@claude-sonnet-4', name: 'Pi · Claude Sonnet 4' }],
+    probed: true,
+    updatedAt: 1,
+  }
+
+  it('does not blame only the visibility filter when the agent dropped the model', () => {
+    // The route names a variant the agent's catalog no longer lists. The old
+    // detail said "not checked as visible in Settings → NTR" and nothing else,
+    // which sent people hunting for a checkbox they had already ticked (F25).
+    const route = describeRoute([agent], { ...bound, modelId: 'pi@gone' }, undefined, catalog)
+    const menu = menuFor('model', { acp, agents: [agent], catalog, route })
+    const row = menu.sections[0]?.items[0]
+    expect(row?.id).toBe('pi@gone')
+    expect(row?.detail).toContain('设置 → NTR')
+    expect(row?.detail).toContain('掉出')
+    // A dropped model is NOT silently replaced: the host refuses the turn and
+    // the picker points at the refresh gesture instead of promising a fallback.
+    expect(row?.detail).not.toContain('仍然可用')
+    expect(row?.detail).toContain('拒绝')
+    expect(row?.detail).toContain('刷新目录')
+  })
+
+  it('keeps both causes in the detail when the exposure filter hides the model', () => {
+    // The other cause: the agent is on a model its own exposure filter hides.
+    const offList: AgentCatalogResult = { ...catalog, variants: [], currentModel: { value: 'hy3', name: 'Hy3' } }
+    const route = describeRoute([agent], undefined, undefined, offList, 'pi')
+    const menu = menuFor('model', { acp, agents: [agent], catalog: offList, route })
+    const row = menu.sections[0]?.items[0]
+    expect(row?.label).toContain('当前')
+    expect(row?.detail).toContain('设置 → NTR')
+    expect(row?.detail).toContain('掉出')
+  })
+
+  it('names a picked current model by its catalog name even when the filter hides it', () => {
+    // Pinning the displayed default makes it a normal variant pick. If that
+    // model is not in `exposedModels`, the chip must still say "Hy3", not the
+    // raw agent-facing value.
+    const offList: AgentCatalogResult = { ...catalog, variants: [], currentModel: { value: 'hy3', name: 'Hy3' } }
+    const route = describeRoute([agent], { ...bound, modelId: 'pi@hy3' }, undefined, offList)
+    expect(route.modelLabel).toBe('Hy3')
+  })
+
+  it('ends the model menu with an explicit refresh row and shows a probe in flight', () => {
+    const route = describeRoute([agent], bound, undefined, catalog)
+    const idle = menuFor('model', { acp, agents: [agent], catalog, route })
+    // The action is a ROW, not a model: it carries no active mark, and it is
+    // last so the model rows keep their order.
+    expect(idle.sections[0]?.items.at(-1)).toMatchObject({
+      id: REFRESH_CATALOG_ITEM,
+      label: '刷新目录',
+      disabled: false,
+    })
+    const busy = menuFor('model', { acp, agents: [agent], catalog, route, probing: true })
+    expect(busy.sections[0]?.items.at(-1)).toMatchObject({
+      id: REFRESH_CATALOG_ITEM,
+      label: '正在检测…',
+      disabled: true,
+    })
+    // Even before any catalog has loaded, the refresh action is the way to
+    // fetch one on demand.
+    const cold = menuFor('model', { acp, agents: [agent], route: describeRoute([agent], bound, undefined) })
+    expect(cold.sections[0]?.items.at(-1)?.id).toBe(REFRESH_CATALOG_ITEM)
+  })
+})
+
+describe('a parked session row yields to the conversation pick, so a pre-switch shows', () => {
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const catalog: AgentCatalogResult = {
+    agentId: 'pi',
+    title: 'Pi',
+    base: { id: 'pi', name: 'Pi' },
+    variants: [{ id: 'pi@sonnet', name: 'Sonnet' }, { id: 'pi@opus', name: 'Opus' }],
+    reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'low' },
+    probed: true,
+    updatedAt: 1,
+  }
+  const parked: ChatSessionView = {
+    agentId: 'pi', agentTitle: 'Pi', sessionId: 's1',
+    modelId: 'pi@sonnet', reasoningEffort: 'low', released: true,
+  }
+  const pick: AcpConversationChoice = { agentId: 'pi', modelId: 'pi@opus', effort: 'high' }
+
+  it('shows the picked model and effort over the parked session\'s last values', () => {
+    // The chip used to snap back to the parked value on every re-read, which
+    // made switching model/effort on a released session look like a dead
+    // control even though the pick had been recorded.
+    const route = describeRoute([agent], parked, undefined, catalog, 'pi', pick)
+    expect(route.modelId).toBe('pi@opus')
+    expect(route.effortLabel).toBe('High')
+  })
+
+  it('keeps naming what the parked session ran when nothing was picked', () => {
+    const route = describeRoute([agent], parked, undefined, catalog, 'pi', undefined)
+    expect(route.modelId).toBe('pi@sonnet')
+    expect(route.effortLabel).toBe('Low')
+  })
+
+  it('lets a LIVE session keep outranking the pick', () => {
+    const live: ChatSessionView = {
+      agentId: 'pi', agentTitle: 'Pi', sessionId: 's1',
+      modelId: 'pi@sonnet', reasoningEffort: 'low',
+    }
+    const route = describeRoute([agent], live, undefined, catalog, 'pi', pick)
+    expect(route.modelId).toBe('pi@sonnet')
+    expect(route.effortLabel).toBe('Low')
+  })
+
+  it('applies the same precedence to the mode select (modeInForce)', () => {
+    // A live session is the authority; a parked row yields to the pick (which
+    // the next resume applies) and only then names what it was parked on.
+    expect(modeInForce({ modes: { currentModeId: 'plan' } }, 'edits')).toBe('plan')
+    expect(modeInForce({ released: true, modes: { currentModeId: 'plan' } }, 'edits')).toBe('edits')
+    expect(modeInForce({ released: true, modes: { currentModeId: 'plan' } }, undefined)).toBe('plan')
+    expect(modeInForce(undefined, 'edits')).toBe('edits')
+    expect(modeInForce(undefined, undefined, 'first')).toBe('first')
+    expect(modeInForce(undefined, undefined)).toBe('')
+    // A configured new-chat default outranks a parked row (the next resume
+    // applies it), while a LIVE session still reflects what the agent runs.
+    expect(modeInForce({ released: true, modes: { currentModeId: 'plan' } }, undefined, 'catalog', 'bypass')).toBe('bypass')
+    expect(modeInForce({ modes: { currentModeId: 'plan' } }, undefined, 'catalog', 'bypass')).toBe('plan')
+    expect(modeInForce(undefined, undefined, 'catalog', 'bypass')).toBe('bypass')
+  })
+})
+
+describe('the thought picker calls its cleared-pick row the agent default', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const bound: ChatSessionView = { agentId: 'pi', agentTitle: 'Pi', sessionId: 's1', modelId: 'pi' }
+
+  it('names the agent, because no provider is on this axis', () => {
+    // This axis is the agent's own `thought_level`; `listModels('acp')` answers
+    // an empty catalog, so "provider default" described a participant that does
+    // not exist (F43). The id is the internal sentinel the pick handler compares
+    // against — the label is what the user reads.
+    const route = describeRoute([agent], bound, undefined)
+    expect(route.effectiveEffort).toBeUndefined()
+    const menu = menuFor('thought', { acp, agents: [agent], route })
+    expect(menu.sections[0]?.items[0]).toMatchObject({
+      id: 'provider-default',
+      label: '跟随 agent 默认',
+      active: true,
+    })
+  })
+})
+
+describe('the advanced base collects the agent’s remaining config options', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const catalog: AgentCatalogResult = {
+    agentId: 'pi',
+    title: 'Pi',
+    base: { id: 'pi', name: 'Pi' },
+    variants: [],
+    probed: true,
+    extras: [
+      {
+        configId: 'temp',
+        name: 'Temperature',
+        currentValue: 'mid',
+        choices: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+      },
+      {
+        configId: 'brave',
+        name: 'Brave Mode',
+        choices: [{ id: 'on', name: 'On' }, { id: 'off', name: 'Off' }],
+      },
+      {
+        // A boolean toggle: no choices, `kind` marks the checkbox form.
+        configId: 'stream',
+        name: 'Stream Mode',
+        kind: 'boolean',
+        currentValue: 'false',
+        choices: [],
+      },
+    ],
+  }
+  const route = describeRoute([agent], undefined, undefined, catalog, 'pi')
+
+  it('overlays the conversation pick and ignores another agent’s pick', () => {
+    expect(advancedOptions(catalog, { agentId: 'pi', extraConfigs: { temp: 'high' } })).toEqual([
+      {
+        configId: 'temp',
+        name: 'Temperature',
+        value: 'high',
+        choices: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+      },
+      {
+        configId: 'brave',
+        name: 'Brave Mode',
+        choices: [{ id: 'on', name: 'On' }, { id: 'off', name: 'Off' }],
+      },
+      {
+        configId: 'stream',
+        name: 'Stream Mode',
+        kind: 'boolean',
+        value: 'false',
+        choices: [],
+      },
+    ])
+    // A pick from the previous agent is that agent's vocabulary: it must not
+    // label this catalog's first option.
+    expect(advancedOptions(catalog, { agentId: 'omp', extraConfigs: { temp: 'low' } })[0]?.value).toBe('mid')
+    expect(advancedOptions(undefined, undefined)).toEqual([])
+  })
+
+  it('builds one config-prefixed section per option, with the pick checked', () => {
+    const menu = menuFor('advanced', {
+      acp,
+      agents: [agent],
+      route,
+      catalog,
+      choice: { agentId: 'pi', extraConfigs: { temp: 'high' } },
+    })
+    expect(menu.title).toBe('高级选项')
+    // The prefix keeps an agent option literally named `model` from colliding
+    // with the primary model picker's section id.
+    expect(menu.sections.map(section => section.id)).toEqual(['config:temp', 'config:brave', 'config:stream'])
+    expect(menu.sections[0]).toMatchObject({ title: 'Temperature' })
+    expect(menu.sections[0]?.items).toEqual([
+      { id: 'low', label: 'Low', active: false },
+      { id: 'high', label: 'High', active: true },
+    ])
+  })
+
+  it('draws a boolean option as ONE checkbox row that sends the opposite value', () => {
+    const menu = menuFor('advanced', {
+      acp,
+      agents: [agent],
+      route,
+      catalog,
+      choice: { agentId: 'pi', extraConfigs: { stream: true } },
+    })
+    // No section title: the row's own label carries the option name, and a
+    // title above a single checkbox would say it twice.
+    expect(menu.sections[2]).toEqual({
+      id: 'config:stream',
+      items: [{ id: 'false', label: 'Stream Mode', active: true, checkbox: true }],
+    })
+    // Off: the row is unchecked and clicking it sets 'true'.
+    const off = menuFor('advanced', {
+      acp,
+      agents: [agent],
+      route,
+      catalog,
+      choice: { agentId: 'pi', extraConfigs: { stream: false } },
+    })
+    expect(off.sections[2]?.items).toEqual([{ id: 'true', label: 'Stream Mode', active: false, checkbox: true }])
+  })
+})
+
+describe('the agent-mode tooltip does not call the host access mode complementary', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+
+  it('says the Access mode is hidden in the conversation where this select appears', () => {
+    // The same ACP-mode gate that renders this select hides the host's Access
+    // mode (`createPermissionSeatClaim` renders nothing in that seat), so the two
+    // never share a screen and "complementary" was false (F27).
+    const title = agentModeTitle('pi', acp)
+    expect(title).toContain('由 agent 自己定义')
+    expect(title).toContain('Access mode 不显示')
+    expect(title).not.toContain('互补')
+    // An agent id that never resolved still reads as a sentence.
+    expect(agentModeTitle(undefined, acp)).toContain('agent')
+  })
+
+  it('renders only for an ACP conversation, and an explicit no outranks a lingering row', () => {
+    // Switching a conversation off the NTR preset leaves its ACP session row
+    // alive; "a row exists" is not proof of the mode. The host's explicit false
+    // wins, exactly like the agent tag, the context ring and the released
+    // banner. Before the first host answer, the row is the only proof.
+    expect(agentModeVisible(true, false)).toBe(true)
+    expect(agentModeVisible(undefined, true)).toBe(true)
+    expect(agentModeVisible(false, true)).toBe(false)
+    expect(agentModeVisible(undefined, false)).toBe(false)
+  })
+})
+
+describe('the thought card offers a fetch only for a model nobody has seen', () => {
+  const acp = new AcpStore(async () => ({ ok: true, value: {} }), zh => zh)
+  const agent: AgentView = {
+    id: 'pi', title: 'Pi', command: 'pi-acp', args: [],
+    allowedCwdRoots: [], state: 'ready', liveSessions: [],
+  }
+  const catalog: AgentCatalogResult = {
+    agentId: 'pi',
+    title: 'Pi',
+    base: { id: 'pi', name: 'Pi' },
+    variants: [
+      { id: 'pi@plain', name: 'Plain' },
+      { id: 'pi@full', name: 'Full' },
+      { id: 'pi@never', name: 'Never' },
+    ],
+    reasoning: { efforts: [{ id: 'off', name: 'Off' }, { id: 'high', name: 'High' }], defaultEffort: 'high' },
+    currentModel: { value: 'base-model', name: 'Base' },
+    reasoningByModel: {
+      'base-model': { efforts: [{ id: 'off', name: 'Off' }, { id: 'high', name: 'High' }] },
+      plain: { efforts: [] },
+      full: { efforts: [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }] },
+    },
+    probed: true,
+    updatedAt: 1,
+  }
+  const routeFor = (modelId: string, effort?: string) =>
+    describeRoute([agent], undefined, undefined, catalog, 'pi', { agentId: 'pi', modelId, ...(effort === undefined ? {} : { effort }) })
+
+  it('keeps the default row first and offers the fetch after it while the model is unknown', () => {
+    const route = routeFor('pi@never')
+    // No levels to offer (the previous model's list is not borrowed)...
+    expect(route.efforts).toEqual([])
+    // ...and the status is the fetchable one, named as the target model.
+    expect(route.thoughtUnknown).toBe('never')
+    expect(thoughtChip(route, acp).label).toBe('思考 · 默认')
+    expect(thoughtChip(route, acp).title).toContain('还没连接过')
+
+    const menu = menuFor('thought', { acp, agents: [agent], catalog, route })
+    expect(menu.note).toContain('该模型还没连接过')
+    expect(menu.note).toContain('默认思考等级')
+    // "Unknown levels" does not mean "no default": the model's own default is
+    // still selectable, and it is the SAME sentinel the known state uses (the
+    // pick handler clears the record with it — no probe, no notice).
+    expect(menu.sections[0]?.items).toEqual([
+      { id: 'provider-default', label: '跟随 agent 默认', active: true },
+      { id: FETCH_THOUGHT_ITEM, label: '获取模型思考等级列表', detail: '连上 agent 读一次它的配置', disabled: false },
+    ])
+  })
+
+  it('disables the row while fetching and turns it into a retry after a failure', () => {
+    const route = routeFor('pi@never')
+    const busy = menuFor('thought', { acp, agents: [agent], catalog, route, probing: true })
+    expect(busy.sections[0]?.items[1]).toMatchObject({ id: FETCH_THOUGHT_ITEM, label: '正在获取…', disabled: true })
+    // The default row stays clickable while the fetch runs.
+    expect(busy.sections[0]?.items[0]?.id).toBe('provider-default')
+    expect(busy.sections[0]?.items[0]?.disabled).toBeUndefined()
+
+    // The failure text is the card's own error block (the menu shell renders
+    // `error`), and the row stays clickable so the user can retry.
+    const failed = menuFor('thought', { acp, agents: [agent], catalog, route, error: 'acp: agent "pi" does not offer model "never"' })
+    expect(failed.error).toContain('does not offer model')
+    expect(failed.sections[0]?.items[1]).toMatchObject({ label: '重试获取', disabled: false })
+    expect(failed.sections[0]?.items[1]?.detail).toContain('重试')
+  })
+
+  it('renders the default row from the FACTS when an unknown model still reports a level', () => {
+    // A live row can still name a level (a switch clears it, but the card
+    // renders what the route says): the default row must stay, unmarked.
+    const live = describeRoute(
+      [agent],
+      { agentId: 'pi', agentTitle: 'Pi', sessionId: 's1', modelId: 'pi@never', reasoningEffort: 'high' },
+      undefined,
+      catalog,
+    )
+    expect(live.thoughtUnknown).toBe('never')
+    expect(live.effectiveEffort).toBe('high')
+    const items = menuFor('thought', { acp, agents: [agent], catalog, route: live }).sections[0]?.items ?? []
+    expect(items[0]).toMatchObject({ id: 'provider-default', active: false })
+    expect(items[1]?.id).toBe(FETCH_THOUGHT_ITEM)
+  })
+
+  it('never shows the button for a model with a record — even an empty one', () => {
+    const full = routeFor('pi@full')
+    expect(full.thoughtUnknown).toBeUndefined()
+    const fullMenu = menuFor('thought', { acp, agents: [agent], catalog, route: full })
+    expect(fullMenu.note).not.toContain('还没连接过')
+    expect(fullMenu.sections[0]?.items.map(item => item.id)).toEqual(['provider-default', 'low', 'max'])
+    expect(fullMenu.sections[0]?.items.some(item => item.id === FETCH_THOUGHT_ITEM)).toBe(false)
+
+    // Observed WITHOUT the axis (`{ efforts: [] }`) is knowledge, not unknown:
+    // there is nothing to fetch and no chip/menu row to offer it from.
+    const plain = routeFor('pi@plain')
+    expect(plain.thoughtUnknown).toBeUndefined()
+    expect(menuFor('thought', { acp, agents: [agent], catalog, route: plain }).sections[0]?.items.map(item => item.id))
+      .toEqual(['provider-default'])
+  })
+
+  it('keeps the level in force when the record has it', () => {
+    // The fetch changes the CATALOG, not the pick: a known model keeps showing
+    // the user's level, and the card's row labels it as before.
+    const route = routeFor('pi@full', 'max')
+    expect(route.effortLabel).toBe('Max')
+    expect(thoughtChip(route, acp).label).toBe('思考 · Max')
+  })
+})

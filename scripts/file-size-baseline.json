@@ -1,0 +1,15 @@
+{
+  "src/bridge/agent-bridge.ts": 2209,
+  "src/bridge/manager.ts": 1903,
+  "src/bridge/turn-stream.ts": 2541,
+  "src/client/acp-ui.tsx": 1325,
+  "src/client/index.tsx": 1094,
+  "src/client/session-controls.tsx": 1120,
+  "src/client/store.ts": 1597,
+  "tests/acp-view.spec.ts": 1645,
+  "tests/bridge.spec.ts": 1186,
+  "tests/mock-agent.mjs": 1759,
+  "tests/model-seat.spec.ts": 1314,
+  "tests/store.spec.ts": 1129,
+  "tests/update.spec.ts": 1274
+}

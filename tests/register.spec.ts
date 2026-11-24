@@ -1,0 +1,960 @@
+import { describe, expect, it, vi } from 'vitest'
+import { apply, inject, name } from '../src/index.ts'
+import { ACP_TOOL_CALL_NAME, acpToolCallFromUpdate } from '../src/impl.ts'
+
+function fakeCtx() {
+  const listeners: Record<string, Array<(...args: unknown[]) => unknown>> = {}
+  return {
+    webServer: {},
+    connection: {
+      rpc: { handle: vi.fn(() => () => Promise.resolve()) },
+      fetch: { register: vi.fn(() => () => Promise.resolve()) },
+    },
+    effect: vi.fn((fn: unknown) => {
+      if (typeof fn === 'function') (fn as () => unknown)()
+      return fn
+    }),
+    on: vi.fn((name: string, listener: (...args: unknown[]) => unknown) => {
+      (listeners[name] ??= []).push(listener)
+      return () => { /* the plugin owns no listener state */ }
+    }),
+    listeners,
+  } as unknown as {
+    webServer: object
+    connection: { rpc: { handle: ReturnType<typeof vi.fn> }; fetch: { register: ReturnType<typeof vi.fn> } }
+    effect: ReturnType<typeof vi.fn>
+    on: ReturnType<typeof vi.fn>
+    listeners: Record<string, Array<(...args: unknown[]) => unknown>>
+  }
+}
+
+describe('host plugin contract', () => {
+  it('exports Cordis loader metadata', () => {
+    expect(name).toBe('dsh-ntr')
+    expect(inject).toEqual(['webServer', 'connection'])
+    expect(typeof apply).toBe('function')
+  })
+
+  it('mounts the /acp rpc channel and the SSE fetch route from valid config', () => {
+    const ctx = fakeCtx()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(ctx.connection.rpc.handle).toHaveBeenCalledWith('/acp', expect.any(Function))
+    expect(ctx.connection.fetch.register).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/api/acp/stream',
+      methods: ['GET'],
+    }))
+    expect(ctx.effect).toHaveBeenCalled()
+  })
+
+  it('wires archive admission and archive writes as event listeners, never polling', () => {
+    const ctx = fakeCtx()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    // The host's registry asks providers before an archive and emits the
+    // workspace-domain write afterwards; both are plain Cordis events.
+    expect(ctx.on.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+      'workspace/session-activity',
+      'workspace/session-stop',
+      'domain/changed',
+    ]))
+  })
+
+  it('answers archive admission with the next result when the plugin has no work', async () => {
+    const ctx = fakeCtx()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    const listener = ctx.listeners['workspace/session-activity']?.[0]
+    expect(listener).toBeDefined()
+    // A conversation this plugin never served adds nothing of its own.
+    const rest = [{ kind: 'turn' }]
+    await expect(Promise.resolve(listener!({ sessionId: 'dsh-cold' }, async () => rest))).resolves.toEqual(rest)
+  })
+
+  it('ignores a domain write that is not the workspace archive set', () => {
+    const ctx = fakeCtx()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    const listener = ctx.listeners['domain/changed']?.[0]
+    expect(listener).toBeDefined()
+    expect(() => listener!({ domain: 'session', table: '', key: '', operation: 'put', value: {} })).not.toThrow()
+    expect(() => listener!(undefined)).not.toThrow()
+  })
+
+  it('keeps archiving alive on a runtime without the archive event face', () => {
+    const ctx = fakeCtx()
+    delete (ctx as unknown as { on?: unknown }).on
+    expect(() => apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })).not.toThrow()
+  })
+
+  it('prefers the owner-explicit channel register when the runtime Connection service exposes it', () => {
+    // rc.2 runtimes: `rpc.handle` re-roots service lookups at the Connection
+    // service's own scope (no `webServer` injected there) and the registration
+    // dies with `cannot get property "webServer" without inject`. The private
+    // `register(owner, channel, handler)` takes the owner explicitly instead.
+    const ctx = fakeCtx() as unknown as {
+      connection: { register: ReturnType<typeof vi.fn>; rpc: { handle: ReturnType<typeof vi.fn> } }
+    }
+    ctx.connection.register = vi.fn(() => () => Promise.resolve())
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(ctx.connection.register).toHaveBeenCalledWith(ctx, '/acp', expect.any(Function))
+    expect(ctx.connection.rpc.handle).not.toHaveBeenCalled()
+  })
+
+  it('falls back to rpc.handle when the private register throws', () => {
+    // Presence-only probe: a `register` that cannot take (owner, channel, handler)
+    // must leave the plugin on the documented path instead of failing the boot.
+    const ctx = fakeCtx() as unknown as {
+      connection: { register: ReturnType<typeof vi.fn>; rpc: { handle: ReturnType<typeof vi.fn> } }
+    }
+    ctx.connection.register = vi.fn(() => { throw new Error('cannot get property "webServer" without inject') })
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(ctx.connection.rpc.handle).toHaveBeenCalledWith('/acp', expect.any(Function))
+  })
+
+  it('provides the acpSaveGate service on a runtime that supports ctx.provide', () => {
+    // The host settings service and profile HMR resolve this optional service
+    // with `ctx.get('acpSaveGate')`; an older runtime without `provide` keeps
+    // working through the RPC/SSE face instead.
+    const ctx = fakeCtx() as unknown as { provide: ReturnType<typeof vi.fn> }
+    ctx.provide = vi.fn()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(ctx.provide).toHaveBeenCalledWith('acpSaveGate', expect.objectContaining({
+      canSaveNow: expect.any(Function),
+      defer: expect.any(Function),
+      waitForIdle: expect.any(Function),
+      forceFlush: expect.any(Function),
+      status: expect.any(Function),
+    }))
+  })
+
+  it('keeps the channel registered when register returns no disposer, without registering twice', () => {
+    // An unexpected return shape means "this runtime's register is not the one we
+    // know": keep the working channel and hand the effect a no-op disposer rather
+    // than re-registering the same prefix through rpc.handle.
+    const ctx = fakeCtx() as unknown as {
+      connection: { register: ReturnType<typeof vi.fn>; rpc: { handle: ReturnType<typeof vi.fn> } }
+      effect: { mock: { calls: unknown[][] } }
+    }
+    ctx.connection.register = vi.fn(() => ({ dispose: () => Promise.resolve() }))
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(ctx.connection.register).toHaveBeenCalledWith(ctx, '/acp', expect.any(Function))
+    expect(ctx.connection.rpc.handle).not.toHaveBeenCalled()
+    const channel = ctx.effect.mock.calls.find(call => call[1] === 'dsh-ntr: /acp rpc channel') as [() => unknown] | undefined
+    // The effect contract wants a disposer back: an unexpected shape must still
+    // hand one over instead of letting activation/disposal fail.
+    expect(channel).toBeDefined()
+    expect(typeof channel![0]()).toBe('function')
+  })
+
+  it('retries the HMR guard after a degraded first attempt', () => {
+    // A present-but-unusable `hmr` service (no `runExclusive`) must not be
+    // recorded as installed: otherwise the late `ctx.inject(['hmr'])` callback
+    // skips forever, and the guard never recovers when the service does.
+    const ctx = fakeCtx() as unknown as {
+      get: (key: string) => unknown
+      inject: ReturnType<typeof vi.fn>
+    }
+    const original = vi.fn(async () => ({ warnings: [], pending: [] }))
+    const hmr: Record<string, unknown> = { reconcileProfile: original }
+    const callbacks: Record<string, Array<() => void>> = {}
+    ctx.get = (key: string) => (key === 'hmr' ? hmr : undefined)
+    ctx.inject = vi.fn((deps: string[], callback: () => void) => {
+      for (const dep of deps) (callbacks[dep] ??= []).push(callback)
+    })
+
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    // Degraded: the method is untouched, so nothing was recorded.
+    expect(hmr.reconcileProfile).toBe(original)
+
+    // The service recovers and the late injection fires: the guard installs.
+    hmr.runExclusive = vi.fn(async (operation: () => Promise<unknown>) => operation())
+    callbacks.hmr?.[0]?.()
+    expect(hmr.reconcileProfile).not.toBe(original)
+  })
+
+  it('fails the boot loudly on invalid agent config', () => {
+    const ctx = fakeCtx()
+    expect(() => apply(ctx as never, { agents: [{ id: 'BAD ID', command: 'x' }] })).toThrow(/acp/)
+    expect(() => apply(ctx as never, { agents: [{ command: 'x' }] })).toThrow(/id/)
+  })
+
+  it('emits the pending-permission replay on a fresh SSE connection', async () => {
+    // The `permission/request` frame is broadcast ONCE, when the ask is created.
+    // A client that connects later — page reload, second tab, stream outage —
+    // never receives it, and for a ledger ask the settings card is the only
+    // answer entry. The route must therefore emit the replay right after
+    // `stream/open`; the empty case still has to terminate with the live set, or
+    // a reconnecting client keeps whatever card it held from before.
+    //
+    // Only the WIRING is asserted here (the loop runs, in order, on this route):
+    // a non-empty replay needs a live ask, which needs a spawned child — the
+    // frame content itself is covered by `permissionReplayFrames`
+    // (tests/impl.spec.ts) and `pendingPermissionViews` (tests/bridge.spec.ts).
+    const ctx = fakeCtx()
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    const descriptor = ctx.connection.fetch.register.mock.calls.at(-1)?.[0] as {
+      fetch: (request: { signal: AbortSignal }) => Promise<Response>
+    } | undefined
+    expect(descriptor).toBeDefined()
+
+    const controller = new AbortController()
+    const response = await descriptor!.fetch({ signal: controller.signal })
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+    const decoder = new TextDecoder()
+    const frames: unknown[] = []
+    try {
+      while (frames.length < 2) {
+        const { value, done } = await reader.read()
+        if (done) break
+        const text = decoder.decode(value)
+        const payload = /^data: (.*)\n\n$/s.exec(text)?.[1]
+        if (payload !== undefined) frames.push(JSON.parse(payload))
+      }
+    } finally {
+      controller.abort()
+      await reader.cancel().catch(() => { /* the abort already closed it */ })
+    }
+
+    expect(frames[0]).toEqual({ type: 'stream/open' })
+    // Nothing is outstanding (no child was ever spawned), and the terminator
+    // still rides along: an empty live set is what clears a stale card.
+    expect(frames[1]).toEqual({ type: 'permission/synced', requestIds: [] })
+  })
+
+  it('registers the AcpLlmAdapter when llm service is available', () => {
+    const ctx = fakeCtx()
+    const registerAdapter = vi.fn()
+    const get = vi.fn((key: string) => {
+      if (key === 'llm') return { registerAdapter }
+      return undefined
+    })
+    ;(ctx as unknown as { get: typeof get }).get = get
+    apply(ctx as never, { agents: [{ id: 'a', command: 'x' }] })
+    expect(registerAdapter).toHaveBeenCalledWith(['acp'], expect.objectContaining({
+      providerInfo: expect.any(Function),
+      providerRetryPolicy: expect.any(Function),
+      imageRequestPricing: expect.any(Function),
+      listModels: expect.any(Function),
+      resolveModel: expect.any(Function),
+      prepareCall: expect.any(Function),
+      stream: expect.any(Function),
+    }))
+  })
+
+  it('reports nothing about approval or access-mode routing — both axes are retired', async () => {
+    // `agents/list` used to carry `approvalRouted` (the host took asks into its
+    // own approval chain) and, before that, `accessModeRouted` (the host
+    // arbitrated the agent's asks). Both are gone: EVERY ACP ask is answered
+    // through this plugin's own ledger, so the roster is all that is left —
+    // and nothing may resurrect a routing capability field.
+    async function listWith(get: (key: string) => unknown): Promise<Record<string, unknown>> {
+      const ctx = fakeCtx()
+      let rpcHandler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+      ctx.connection.rpc.handle = vi.fn((_channel: string, handler: unknown) => {
+        rpcHandler = handler as typeof rpcHandler
+        return () => Promise.resolve()
+      })
+      ;(ctx as unknown as { get: unknown }).get = get
+      apply(ctx as never, { agents: [{ id: 'agent-1', command: 'run' }] })
+      const answer = await rpcHandler!('agents/list', {}, new AbortController().signal)
+      return (answer as { value: Record<string, unknown> }).value
+    }
+
+    // The host services the retired route needed are present here on purpose:
+    // their presence must not change the answer.
+    const answer = await listWith(key => {
+      if (key === 'approval') return { request: vi.fn(), config: { policy: 'ask' } }
+      if (key === 'agents') return { get: vi.fn() }
+      if (key === 'sandboxPolicy') return { resolve: vi.fn(() => ({ mode: 'read-only', workspaceRoot: '/tmp/ws' })) }
+      if (key === 'sessions') return { get: vi.fn(() => ({ events: [] })) }
+      return undefined
+    })
+    expect(answer).not.toHaveProperty('approvalRouted')
+    expect(answer).not.toHaveProperty('accessModeRouted')
+    // Nothing else the retired axes reported may come back either.
+    expect(Object.keys(answer).sort()).toEqual(['agents'])
+  })
+
+  it('answers the seat gate for a COLD session through the persistence store, without the access-mode knobs', async () => {
+    // One plugin instance answers repeated asks: the browser's gate asks again
+    // on every store tick, and the cached verdict is what makes that cheap.
+    const readHandle = {
+      header: { agentPreset: 'standard' },
+      read: vi.fn(async () => ({ events: [{ type: 'agent-preset/selected', data: { agentPreset: 'acp' } }] })),
+      close: vi.fn(async () => {}),
+    }
+    const persistence = { open: vi.fn(async () => readHandle) }
+    const ctx = fakeCtx()
+    let rpcHandler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+    ctx.connection.rpc.handle = vi.fn((_channel: string, handler: unknown) => {
+      rpcHandler = handler as typeof rpcHandler
+      return () => Promise.resolve()
+    })
+    // Deliberately NO sandboxPolicy and NO approval: the seat gate's verdict
+    // depends on neither — a deployment without them must still take the seat.
+    const services: Record<string, unknown> = {
+      sessions: { get: vi.fn(() => undefined) },
+      sessionPersistence: persistence,
+    }
+    ;(ctx as unknown as { get: unknown }).get = (key: string) => services[key]
+    apply(ctx as never, { agents: [{ id: 'agent-1', command: 'run' }] })
+    const ask = async (dshSessionId: string): Promise<Record<string, unknown>> => {
+      const answer = await rpcHandler!('session/chat-list', { dshSessionId }, new AbortController().signal)
+      return (answer as { value: Record<string, unknown> }).value
+    }
+
+    // First ask: the RPC WAITS for the persistence read, so the settled
+    // verdict arrives on the very first response — the browser's one-shot
+    // fallback must not be told "not ACP" while the read is still in flight.
+    const first = await ask('session-cold')
+    expect(first.acpMode).toBe(true)
+    expect(persistence.open).toHaveBeenCalledWith('session-cold', 'read')
+    expect(readHandle.close).toHaveBeenCalled()
+    // Second ask: the settled verdict is cached; the store is opened once.
+    const second = await ask('session-cold')
+    expect(second.acpMode).toBe(true)
+    expect(persistence.open).toHaveBeenCalledTimes(1)
+
+    // A stored log whose newest selection is another preset stays native.
+    const otherHandle = {
+      header: { agentPreset: 'standard' },
+      read: async () => ({ events: [{ type: 'agent-preset/selected', data: { agentPreset: 'standard' } }] }),
+      close: vi.fn(async () => {}),
+    }
+    services.sessionPersistence = { open: vi.fn(async () => otherHandle) }
+    const other = await ask('session-other')
+    expect(other.acpMode).toBe(false)
+
+    // No persistence service: `false`, never a throw — and the access-mode
+    // knobs' absence changes nothing about that.
+    services.sessionPersistence = undefined
+    const bare = await ask('session-unknown')
+    expect(bare.acpMode).toBe(false)
+  })
+
+  it('carries the config file\'s approval deadlines into the settings card, and lets the card override them', async () => {
+    // The wiring `dispatchRpc`'s fake manager cannot see: the host entry has to
+    // hand the manager the RAW patch values, so the card can tell "the file
+    // asked for 10 minutes" from "nothing was configured, 5 is the built-in
+    // default" — and a settings write has to outrank the file afterwards.
+    const ctx = fakeCtx()
+    let rpcHandler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+    ctx.connection.rpc.handle = vi.fn((_channel: string, handler: unknown) => {
+      rpcHandler = handler as typeof rpcHandler
+      return () => Promise.resolve()
+    })
+    apply(ctx as never, {
+      agents: [{ id: 'agent-1', command: 'run' }],
+      // The ONE window named in the file. The mode is named too, for the same
+      // reason — "the file says `wait`" and "nothing was configured" are
+      // different facts.
+      permissionTimeoutMs: 600_000,
+      permissionTimeoutMode: 'wait',
+    })
+    const ask = async (endpoint: string, payload: unknown = {}): Promise<Record<string, unknown>> => {
+      const answer = await rpcHandler!(endpoint, payload, new AbortController().signal)
+      return (answer as { value: Record<string, unknown> }).value
+    }
+
+    expect((await ask('ui/approval-deadlines')).deadlines).toEqual({
+      permissionTimeoutMs: 600_000,
+      mode: 'wait',
+      configured: { permissionTimeoutMs: 600_000 },
+      configuredMode: 'wait',
+    })
+
+    // The settings write wins from here on, without a restart.
+    expect((await ask('ui/approval-deadlines-set', { permissionTimeoutMs: 30_000 })).deadlines)
+      .toMatchObject({ permissionTimeoutMs: 30_000 })
+    expect((await ask('ui/approval-deadlines')).deadlines)
+      .toMatchObject({ permissionTimeoutMs: 30_000, configured: { permissionTimeoutMs: 600_000 } })
+
+    // The mode is writable through the same route, and outranks the file.
+    expect((await ask('ui/approval-deadlines-set', { mode: 'auto' })).deadlines)
+      .toMatchObject({ mode: 'auto', configuredMode: 'wait' })
+    // A mode outside the three is refused. (A protocol error comes back on the
+    // envelope itself, not inside `value` — same shape as `unknown_endpoint`.)
+    expect(await rpcHandler!('ui/approval-deadlines-set', { mode: 'maybe' }, new AbortController().signal))
+      .toMatchObject({ ok: false, error: { code: 'bad_payload' } })
+
+    // Reset returns to the file's value.
+    expect((await ask('ui/approval-deadlines-set', { reset: true })).deadlines)
+      .toMatchObject({ permissionTimeoutMs: 600_000, mode: 'wait' })
+  })
+
+  it('never touches the host model layer at all — no route, no default, no guard', async () => {
+    const ctx = fakeCtx()
+    let rpcHandler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
+    ctx.connection.rpc.handle = vi.fn((_channel: string, handler: unknown) => {
+      rpcHandler = handler as typeof rpcHandler
+      return () => Promise.resolve()
+    })
+    // Every service the retired provider axis consumed. Present on purpose: the
+    // new shape must not need ANY of them, so a deployment with them all wired
+    // behaves exactly like one with none.
+    const saveSelection = vi.fn(async () => {})
+    const currentSelection = vi.fn(() => ({ provider: 'deepseek', model: 'deepseek-v4' }))
+    const get = vi.fn((key: string) => {
+      if (key === 'agentDefaultModel') return { currentSelection, saveSelection }
+      if (key === 'sandboxPolicy') return { resolve: vi.fn(() => ({ mode: 'read-only', workspaceRoot: '/tmp/ws' })) }
+      if (key === 'sessions') return { get: vi.fn(() => ({ events: [] })) }
+      return undefined
+    })
+    ;(ctx as unknown as { get: typeof get }).get = get
+    apply(ctx as never, { agents: [{ id: 'agent-1', command: 'run' }] })
+
+    expect(rpcHandler).toBeDefined()
+    const dummySignal = new AbortController().signal
+
+    // The plugin's OWN default agent is its private state, answered by its own
+    // endpoint — nothing here is shaped like a model route.
+    expect(await rpcHandler!('default/agent', {}, dummySignal)).toEqual({ ok: true, value: { agentId: undefined } })
+    expect(await rpcHandler!('default/agent-set', { agentId: 'agent-1' }, dummySignal)).toEqual({ ok: true, value: { done: true } })
+    expect(await rpcHandler!('default/agent', {}, dummySignal)).toEqual({ ok: true, value: { agentId: 'agent-1' } })
+    // …and the binding for one conversation goes to the plugin's own RPC.
+    expect(await rpcHandler!('session/chat-bind', { dshSessionId: 'chat-1', agentId: 'agent-1' }, dummySignal))
+      .toEqual({ ok: true, value: { done: true } })
+
+    // The host's model layer was never read, never written, never guarded.
+    expect(saveSelection).not.toHaveBeenCalled()
+    expect(currentSelection).not.toHaveBeenCalled()
+
+    // The retired endpoints are gone: they exist only to be refused now.
+    for (const endpoint of ['model/get-default', 'model/set-default', 'model/reconcile-default']) {
+      expect(await rpcHandler!(endpoint, {}, dummySignal)).toMatchObject({ ok: false, error: { code: 'unknown_endpoint' } })
+    }
+  })
+})
+
+describe('acp-guard preset row', () => {
+  /**
+   * The guard registers its listeners on whatever ctx the Loader hands the
+   * preset row. This fake records the registrations so the tests can fire the
+   * listeners directly — the real dispatch (`dispatch.waterfall`) is a runtime
+   * concern these tests stand in for.
+   */
+  function guardCtx(services: Record<string, unknown> = {}) {
+    const listeners = new Map<string, { listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>; options?: unknown }>()
+    return {
+      listeners,
+      on: vi.fn((name: string, listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>, options?: unknown) => {
+        listeners.set(name, { listener, options })
+        return () => {}
+      }),
+      get: vi.fn((service: string) => services[service]),
+    }
+  }
+
+  /** A fake `tools` service: a scoped `get` view plus a `register` spy. */
+  function toolsServiceOf(existing: Record<string, unknown> = {}) {
+    const registered = new Map<string, unknown>()
+    return {
+      registered,
+      get: vi.fn((name: string) => existing[name] ?? registered.get(name)),
+      register: vi.fn((definition: { name: string }) => { registered.set(definition.name, definition) }),
+    }
+  }
+
+  it('registers the legacy route rewrite outermost, plus the model-selection seam', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    // DSH 0.2.2+ fixes the step's route before `agent/request`; the binding is
+    // recorded through `agent.model.select` on the splice/claim that starts
+    // the step. Older hosts keep the waterfall rewrite, registered outermost:
+    // `installModelSelection`'s own rewrite registers BEFORE the preset rows
+    // mount and waterfall listeners run outermost-first, so only that slot
+    // lets the binding's rewrite land last (and win).
+    expect(ctx.on).toHaveBeenCalledWith('agent/request', expect.any(Function), { prepend: true })
+    // The gate must be outermost too: `installModelSelection` appends its
+    // "model changed" notice after `next()`, so an inner gate cannot strip it.
+    expect(ctx.on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
+    expect(ctx.on).toHaveBeenCalledWith('agent/inbox/inserted', expect.any(Function))
+    expect(ctx.on).toHaveBeenCalledWith('agent/inbox/claimed', expect.any(Function))
+  })
+
+  it('rewrites the resolved request to the conversation binding, dropping the inherited effort', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const request = ctx.listeners.get('agent/request')
+    if (request === undefined) throw new Error('guard registered no agent/request listener')
+
+    // The plugin records the binding on `session/chat-bind`; the registry is
+    // the SAME object bridge.ts installs on globalThis (cross-instance share).
+    const { ACP_ROUTE_BINDING_KEY, routeBindingRegistry } = await import('../src/bridge.ts')
+    expect((globalThis as Record<symbol, unknown>)[ACP_ROUTE_BINDING_KEY as symbol]).toBe(routeBindingRegistry())
+    routeBindingRegistry().conversations.set('dsh-guard-1', 'beta@mock-model-b')
+    try {
+      // What the harness's own chain resolves for a never-ACP session: the
+      // deployment default, with its materialized effort.
+      const resolved = await request.listener(
+        { agent: { session: { id: 'dsh-guard-1' } } },
+        async () => ({ provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }),
+      )
+      expect(resolved).toEqual({ provider: 'acp', model: 'beta@mock-model-b' })
+    } finally {
+      routeBindingRegistry().conversations.delete('dsh-guard-1')
+    }
+  })
+
+  it('falls back to the plugin default agent for a conversation nobody bound', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const request = ctx.listeners.get('agent/request')
+    if (request === undefined) throw new Error('guard registered no agent/request listener')
+
+    const { routeBindingRegistry } = await import('../src/bridge.ts')
+    const registry = routeBindingRegistry()
+    const previousDefault = registry.defaultModel
+    registry.defaultModel = 'fallback-agent'
+    try {
+      const resolved = await request.listener(
+        { agent: { session: { id: 'dsh-guard-unbound' } } },
+        async () => ({ provider: 'deepseek', model: 'deepseek-v4' }),
+      )
+      expect(resolved).toEqual({ provider: 'acp', model: 'fallback-agent' })
+    } finally {
+      registry.defaultModel = previousDefault
+    }
+  })
+
+  it('leaves the resolved route untouched when nothing is bound (and never throws)', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const request = ctx.listeners.get('agent/request')
+    if (request === undefined) throw new Error('guard registered no agent/request listener')
+
+    const { routeBindingRegistry } = await import('../src/bridge.ts')
+    const registry = routeBindingRegistry()
+    const previousDefault = registry.defaultModel
+    registry.defaultModel = undefined
+    try {
+      const seed = { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }
+      const untouched = await request.listener({ agent: { session: { id: 'dsh-guard-none' } } }, async () => seed)
+      expect(untouched).toBe(seed)
+      // A payload without a session id must not rewrite either.
+      const anonymous = await request.listener({ agent: {} }, async () => seed)
+      expect(anonymous).toBe(seed)
+    } finally {
+      registry.defaultModel = previousDefault
+    }
+  })
+
+  it('registers the tools/execute listener: cards execute as real results again', async () => {
+    // The fourth duty is back, upgraded: under the segmented turn shape the
+    // host loop executes a card the moment its segment settles — often before
+    // the agent reports the output — so the virtual tool's body parks on the
+    // registry's `waitForToolOutput` instead of answering instantly.
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    expect(ctx.listeners.has('tools/execute')).toBe(true)
+    expect(ctx.listeners.has('agent/pre-step')).toBe(true)
+    expect(ctx.listeners.has('agent/request')).toBe(true)
+  })
+
+  it('answers a card execution from the registry, and waits when the output has not landed yet', async () => {
+    const { routeBindingRegistry, recordAcpToolOutput, releaseAllToolOutputWaiters } = await import('../src/bridge.ts')
+    // A name that resolves to a REAL tool passes untouched (this row must
+    // never shadow the host's own tools).
+    const realTool = { name: 'real', execute: () => ({ text: 'real' }) }
+    const toolsWithReal = toolsServiceOf({ real: realTool })
+    const ctxReal = guardCtx({ tools: toolsWithReal })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctxReal as never, undefined))
+    // Issue #18: the reserved name is reserved at mount. Executing a REAL tool
+    // still passes untouched and adds no registration.
+    expect(toolsWithReal.register).toHaveBeenCalledTimes(1)
+    expect(toolsWithReal.register.mock.calls[0][0]).toMatchObject({ name: ACP_TOOL_CALL_NAME })
+    const execReal = ctxReal.listeners.get('tools/execute')
+    if (execReal === undefined) throw new Error('no tools/execute listener')
+    const downstream = vi.fn(async () => ({ text: 'downstream' }))
+    await execReal.listener({ name: 'real', agent: {}, exec: { callId: 'r1' } }, downstream)
+    expect(toolsWithReal.register).toHaveBeenCalledTimes(1)
+    expect(downstream).toHaveBeenCalledTimes(1)
+
+    // The reserved constant name registers a scoped virtual tool whose body first answers
+    // from the registry when the output already landed…
+    recordAcpToolOutput('wait-1', 'REAL OUTPUT')
+    try {
+      const unknown = toolsServiceOf()
+      const ctxCard = guardCtx({ tools: unknown })
+      await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctxCard as never, undefined))
+      const execCard = ctxCard.listeners.get('tools/execute')
+      if (execCard === undefined) throw new Error('no tools/execute listener')
+      const next = vi.fn(async () => ({ text: 'would-execute' }))
+      await execCard.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'wait-1' } }, next)
+      expect(unknown.register).toHaveBeenCalledTimes(1)
+      expect(unknown.register.mock.calls[0][0]).toMatchObject({ name: ACP_TOOL_CALL_NAME })
+      const definition = unknown.register.mock.calls[0][0] as { execute: (args: unknown, exec: { callId: string }) => Promise<{ text: string }> }
+      expect(await definition.execute(undefined, { callId: 'wait-1' })).toEqual({ text: 'REAL OUTPUT' })
+
+      // …and parks on `waitForToolOutput` when it has not, released by the
+      // record itself (the guard must not answer with a pointer while the
+      // agent is still running the tool).
+      const parking = definition.execute(undefined, { callId: 'wait-2' })
+      let settled = false
+      void parking.then(() => { settled = true })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(settled).toBe(false)
+      recordAcpToolOutput('wait-2', 'LATE OUTPUT')
+      expect(await parking).toEqual({ text: 'LATE OUTPUT' })
+
+      // A turn's settlement releases every parked waiter with the pointer.
+      const parked = definition.execute(undefined, { callId: 'wait-3' })
+      releaseAllToolOutputWaiters()
+      expect(await parked).toMatchObject({ text: expect.stringContaining('ACP transcript view') })
+    } finally {
+      releaseAllToolOutputWaiters()
+      routeBindingRegistry().toolResults.clear()
+      routeBindingRegistry().toolOutputFinal.clear()
+    }
+  })
+
+  it('keeps a card parked past the announcement, and releases it on the real output', async () => {
+    // Issue #10's placeholder: CodeBuddy announces a call, restates its title,
+    // and only then restates the call with the output attached. The
+    // announcement records the call with an EMPTY output, and answering a parked
+    // card with that record made every display card read "its output lives in
+    // the ACP transcript view" no matter what the tool printed.
+    const { routeBindingRegistry, recordAcpToolOutput, releaseAllToolOutputWaiters } = await import('../src/bridge.ts')
+    try {
+      const tools = toolsServiceOf()
+      const ctx = guardCtx({ tools })
+      await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+      const exec = ctx.listeners.get('tools/execute')
+      if (exec === undefined) throw new Error('no tools/execute listener')
+      await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'announce-1' } }, async () => ({ text: 'downstream' }))
+      const definition = tools.register.mock.calls[0][0] as { execute: (args: unknown, exec: { callId: string }) => Promise<{ text: string }> }
+
+      recordAcpToolOutput('announce-1', '')
+      const parked = definition.execute(undefined, { callId: 'announce-1' })
+      let settled = false
+      void parked.then(() => { settled = true })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(settled).toBe(false)
+      recordAcpToolOutput('announce-1', 'hello')
+      expect(await parked).toEqual({ text: 'hello' })
+
+      // A tool that printed nothing is terminal, not still running: the agent's
+      // own `completed` status releases the card at once instead of parking it
+      // until the turn settles (which would push the step boundary past the
+      // whole ACP turn and collapse the segmentation).
+      recordAcpToolOutput('empty-1', '', true)
+      expect(await definition.execute(undefined, { callId: 'empty-1' })).toMatchObject({ text: expect.stringContaining('ACP transcript view') })
+    } finally {
+      releaseAllToolOutputWaiters()
+      routeBindingRegistry().toolResults.clear()
+      routeBindingRegistry().toolOutputFinal.clear()
+    }
+  })
+
+  it('keeps a batch that carries the person\'s words and still strips the injections', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const preStep = ctx.listeners.get('agent/pre-step')
+    if (preStep === undefined) throw new Error('guard registered no agent/pre-step listener')
+
+    const user = { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] }
+    const injected = { role: 'user', source: { kind: 'skill-catalog' }, content: [{ type: 'text', text: '<available_skills>…' }] }
+    const decision = await preStep.listener({ messages: [user, injected], turn: 1, step: 1 }, async () => ({
+      kind: 'enter',
+      messages: [user, injected],
+    }))
+    expect(decision).toEqual({ kind: 'enter', messages: [user] })
+  })
+
+  it('ends an injected-only wake as the plain no-op it always was', async () => {
+    // A batch the strip empties completely carries no continuation fuel: the
+    // loop itself ends a first step with zero messages as `completed`, so the
+    // gate must not dress it up as a rejection.
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const preStep = ctx.listeners.get('agent/pre-step')
+    if (preStep === undefined) throw new Error('guard registered no agent/pre-step listener')
+
+    const injected = { role: 'user', source: { kind: 'plugin' }, content: [{ type: 'text', text: 'goal material' }] }
+    const decision = await preStep.listener({ messages: [injected], turn: 3, step: 1 }, async () => ({
+      kind: 'enter',
+      messages: [injected],
+    }))
+    expect(decision).toEqual({ kind: 'enter', messages: [] })
+  })
+
+  it('never eats a source-less batch: hand-assembled messages count as the person', async () => {
+    const ctx = guardCtx()
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    const preStep = ctx.listeners.get('agent/pre-step')
+    if (preStep === undefined) throw new Error('guard registered no agent/pre-step listener')
+
+    const handBuilt = { role: 'user', content: [{ type: 'text', text: 'headless prompt' }] }
+    const decision = await preStep.listener({ messages: [handBuilt] }, async () => ({
+      kind: 'enter',
+      messages: [handBuilt],
+    }))
+    expect(decision).toEqual({ kind: 'enter', messages: [handBuilt] })
+  })
+
+
+  it('registers a constant-named display card once from a pwsh command title, and reuses it', async () => {
+    // The fix: ACP cards no longer carry the agent's title as their tool name.
+    // Fold a long command title into a snapshot, then execute the card under
+    // the constant name it now has. The guard registers ONE scoped virtual
+    // tool under that constant and never re-registers an identical name.
+    const command = 'pwsh -NoProfile -Command Get-ChildItem C:/repo -Recurse | Select-String "TODO_42"'
+    const snapshot = acpToolCallFromUpdate({ toolCallId: 'pwsh-card-1', title: command })!
+    expect(snapshot.name).toBe(ACP_TOOL_CALL_NAME)
+    expect((JSON.parse(snapshot.argsRaw) as { description: string }).description).toBe(command)
+
+    const tools = toolsServiceOf()
+    const ctx = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    // Issue #18: the reservation lands at mount, before the first card runs.
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(tools.register.mock.calls[0][0]).toMatchObject({ name: ACP_TOOL_CALL_NAME })
+    const exec = ctx.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    await exec.listener({ name: snapshot.name, agent: {}, exec: { callId: 'pwsh-card-1' } }, next)
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(next).toHaveBeenCalledTimes(1)
+    // Same constant name again: the standing scoped virtual tool is reused
+    // (virtualDefs semantics - never unregister/prune/cap/stop-after-N).
+    await exec.listener({ name: snapshot.name, agent: {}, exec: { callId: 'pwsh-card-2' } }, next)
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(next).toHaveBeenCalledTimes(2)
+  })
+
+  it('SIMULATION ONLY: a tools double whose register throws is caught, no exception leaks, next() runs', async () => {
+    // Simulation of a host whose tools service refuses registration. Retry
+    // policy (issue #18): the mount reservation throws and is swallowed so
+    // apply never fails; the execute listener's lazy path is the ONE retry,
+    // which throws again and still delegates.
+    const tools = toolsServiceOf()
+    tools.register.mockImplementation(() => { throw new Error('simulated register failure') })
+    const ctx = guardCtx({ tools })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined)))
+        .resolves.toBeUndefined()
+      expect(tools.register).toHaveBeenCalledTimes(1) // the swallowed mount attempt
+      const exec = ctx.listeners.get('tools/execute')
+      if (exec === undefined) throw new Error('no tools/execute listener')
+      const next = vi.fn(async () => ({ text: 'downstream' }))
+      await expect(exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'sim-1' } }, next))
+        .resolves.toEqual({ text: 'downstream' })
+      expect(tools.register).toHaveBeenCalledTimes(2) // mount attempt + execute retry
+      expect(next).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls.some(call => String(call[0]).includes('register threw'))).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('HARD ASSERTION: a real host tool under the reserved constant name fails closed (no register, no next)', async () => {
+    // If the reserved name were occupied by a REAL host tool, `return next()`
+    // would let that host tool execute agent-supplied arguments in the host
+    // process, bypassing the plugin's permission ledger. Fail closed instead.
+    const realTool = { name: ACP_TOOL_CALL_NAME, execute: () => ({ text: 'real host tool ran' }) }
+    const tools = toolsServiceOf({ [ACP_TOOL_CALL_NAME]: realTool })
+    const ctx = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    // Mount must not shadow the occupied name either.
+    expect(tools.register).not.toHaveBeenCalled()
+    const exec = ctx.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'collision-1' } }, next)
+    expect(tools.register).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ isError: true })
+  })
+
+  it('pre-registers the reserved tool at mount, so tools.get(CONST) is defined', async () => {
+    // Issue #18: a normal host has NO real tool named dsh_ntr__acp_tool_call,
+    // so the mount reservation registers the display card immediately. Auto
+    // review then finds exactly one schema match in the request header.
+    const tools = toolsServiceOf()
+    const ctx = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    expect(ACP_TOOL_CALL_NAME).toBe('dsh_ntr__acp_tool_call')
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(tools.register.mock.calls[0][0]).toMatchObject({ name: ACP_TOOL_CALL_NAME })
+    expect(tools.get(ACP_TOOL_CALL_NAME)).toBeDefined()
+  })
+
+  it('passes a NON-reserved tool name straight through: one next(), no extra register, no console.warn', async () => {
+    // The isolation gate: only ACP_TOOL_CALL_NAME reaches the registrar.
+    // Everything else is a single string comparison - no probe, no virtual
+    // tool, no diagnostics. guardCtx fires the listener directly (the double
+    // does not model scope routing), which is exactly what the gate guards.
+    const tools = toolsServiceOf()
+    const ctx = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    expect(tools.register).toHaveBeenCalledTimes(1) // mount reservation only
+    const exec = ctx.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = await exec.listener({ name: 'SomeOtherTool', agent: {}, exec: { callId: 'gate-1' } }, next)
+      expect(result).toEqual({ text: 'downstream' })
+      expect(next).toHaveBeenCalledTimes(1)
+      expect(tools.register).toHaveBeenCalledTimes(1)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('pre-registers the display card at mount, and execute does not register again', async () => {
+    // Issue #18: Auto review reads the step's tool schemas in
+    // `tools/pre-execute`, before `tools/execute`; the reservation must
+    // already be on the request header when the card executes.
+    const tools = toolsServiceOf()
+    const ctx = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(tools.register.mock.calls[0][0]).toMatchObject({ name: ACP_TOOL_CALL_NAME })
+    expect(tools.get(ACP_TOOL_CALL_NAME)).toBeDefined()
+
+    const exec = ctx.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'pre-1' } }, next)
+    expect(result).toEqual({ text: 'downstream' })
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(next).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies without a tools service and still delegates the card execution', async () => {
+    const ctx = guardCtx()
+    await expect(import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined)))
+      .resolves.toBeUndefined()
+    const exec = ctx.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'no-tools' } }, next)
+    expect(result).toEqual({ text: 'downstream' })
+    expect(next).toHaveBeenCalledTimes(1)
+  })
+
+  it('reserves once when the tools service arrives after mount', async () => {
+    // The preset may mount before the tools service; the inject seam retries
+    // there, and a repeated delivery must not register a second definition.
+    const services: Record<string, unknown> = {}
+    const ctx = guardCtx(services) as ReturnType<typeof guardCtx> & {
+      inject: (deps: string[], callback: (injected: unknown) => void) => void
+    }
+    let pending: ((injected: unknown) => void) | undefined
+    ctx.inject = vi.fn((_deps, callback) => { pending = callback })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+    if (pending === undefined) throw new Error('guard did not use the inject seam')
+    const tools = toolsServiceOf()
+    services.tools = tools
+    pending(ctx)
+    pending(ctx)
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    expect(tools.get(ACP_TOOL_CALL_NAME)).toBeDefined()
+  })
+
+  it('adopts a predecessor module instance definition by schema fingerprint', async () => {
+    // HMR can leave the PREVIOUS module instance's scoped registration under
+    // the reserved name. The new instance's mount probe only sees the global
+    // layer (undefined), its scoped register throws (the name is taken), and
+    // the execute path receives an object the new WeakSet has never seen.
+    // Identical stable data fields must mark it as ours instead of failing
+    // every card closed.
+    const firstTools = toolsServiceOf()
+    const first = guardCtx({ tools: firstTools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(first as never, undefined))
+    const registered = firstTools.register.mock.calls[0][0] as {
+      name: string
+      description: string
+      parameters: unknown
+    }
+    // A DISTINCT object with the same stable data fields: exactly what a
+    // reloaded module's registration looks like to this module instance
+    // (functions differ in identity, and the WeakSet cannot see it).
+    const predecessor = {
+      ...registered,
+      parameters: JSON.parse(JSON.stringify(registered.parameters)) as unknown,
+      execute: async () => ({ text: 'predecessor module' }),
+    }
+
+    const register = vi.fn(() => { throw new Error('name already registered in this scope') })
+    const tools = {
+      // Mount reservation: the global layer has no entry. Execute: the preset
+      // scope still holds the predecessor's definition.
+      get: vi.fn((name: string, scope?: unknown) => (
+        name === ACP_TOOL_CALL_NAME && scope !== undefined ? predecessor : undefined
+      )),
+      register,
+    }
+    const ctx = guardCtx({ tools })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined)))
+        .resolves.toBeUndefined()
+      expect(register).toHaveBeenCalledTimes(1) // the swallowed mount attempt
+      const exec = ctx.listeners.get('tools/execute')
+      if (exec === undefined) throw new Error('no tools/execute listener')
+      const next = vi.fn(async () => ({ text: 'downstream' }))
+      const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'fingerprint-1' } }, next)
+      expect(result).toEqual({ text: 'downstream' })
+      expect(next).toHaveBeenCalledTimes(1)
+      expect(register).toHaveBeenCalledTimes(1) // reuse must not register again
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('fails closed when the scoped name is a real tool with a different schema', async () => {
+    // The fingerprint fallback must not adopt an arbitrary host tool that
+    // occupies the reserved name: different stable fields keep the
+    // isError / no-next path.
+    const realTool = {
+      name: ACP_TOOL_CALL_NAME,
+      description: 'a real host tool that shares the reserved name',
+      parameters: { type: 'object', properties: { command: { type: 'string' } } },
+      execute: async () => ({ text: 'real host tool ran' }),
+    }
+    const register = vi.fn(() => { throw new Error('name already registered in this scope') })
+    const tools = {
+      get: vi.fn((name: string, scope?: unknown) => (
+        name === ACP_TOOL_CALL_NAME && scope !== undefined ? realTool : undefined
+      )),
+      register,
+    }
+    const ctx = guardCtx({ tools })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(ctx as never, undefined))
+      expect(register).toHaveBeenCalledTimes(1) // mount attempt, swallowed
+      const exec = ctx.listeners.get('tools/execute')
+      if (exec === undefined) throw new Error('no tools/execute listener')
+      const next = vi.fn(async () => ({ text: 'downstream' }))
+      const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'real-schema-1' } }, next)
+      expect(result).toMatchObject({ isError: true })
+      expect(next).not.toHaveBeenCalled()
+      expect(register).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a re-applied guard reuses its predecessor\'s definition instead of failing closed', async () => {
+    // HMR mounts the row again on the same preset scope; the tools registry
+    // still holds the first definition, so identity must mark it as ours.
+    const tools = toolsServiceOf()
+    const first = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(first as never, undefined))
+    expect(tools.get(ACP_TOOL_CALL_NAME)).toBeDefined()
+
+    const second = guardCtx({ tools })
+    await import('../presets/acp/acp-guard.mjs').then(({ apply }) => apply(second as never, undefined))
+    expect(tools.register).toHaveBeenCalledTimes(1)
+    const exec = second.listeners.get('tools/execute')
+    if (exec === undefined) throw new Error('no tools/execute listener')
+    const next = vi.fn(async () => ({ text: 'downstream' }))
+    const result = await exec.listener({ name: ACP_TOOL_CALL_NAME, agent: {}, exec: { callId: 'hmr-1' } }, next)
+    expect(result).toEqual({ text: 'downstream' })
+    expect(next).toHaveBeenCalledTimes(1)
+  })
+
+})
