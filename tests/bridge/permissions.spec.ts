@@ -563,6 +563,69 @@ describe('permission mapping and the agent\'s own modes (isolated manager)', () 
       .resolves.toMatchObject({ ok: false, error: { code: 'unknown_session' } })
   }, 30_000)
 
+  it('restores the pre-plan mode when the human approves an ExitPlanMode ask', async () => {
+    // The agent owns plan exit and codebuddy never announces the restore: the
+    // plugin must synthesize the mode move or the composer chip keeps saying
+    // "plan" after the approval (the reported divergence).
+    await modeTurn('dsh-plan-restore', 'PERM seed')
+    await dispatchRpc(modeManager, 'session/chat-mode-set', { dshSessionId: 'dsh-plan-restore', modeId: 'strict' })
+    const enteredPlan = modeEvents.length
+    await dispatchRpc(modeManager, 'session/chat-mode-set', { dshSessionId: 'dsh-plan-restore', modeId: 'plan' })
+    await modeWaitFor('session/meta', enteredPlan, event => event.session.modes?.currentModeId === 'plan')
+
+    const since = modeEvents.length
+    // `PERMPLAN` raises the ask under the title codebuddy uses, and the mock
+    // agent then sends NO mode update — exactly the agent behaviour this hook
+    // exists for.
+    expect(await modeTurn('dsh-plan-restore', 'PERMPLAN approve the exit', 'allow1')).toContain('perm=allow1')
+    const restored = await modeWaitFor('session/update', since, event =>
+      (event.update as { sessionUpdate?: string }).sessionUpdate === 'current_mode_update'
+      && (event.update as { currentModeId?: string }).currentModeId === 'strict')
+
+    const listed = await dispatchRpc(modeManager, 'session/chat-list', { dshSessionId: 'dsh-plan-restore' })
+    if (!listed.ok) throw new Error('listing failed')
+    const sessions = (listed.value as { sessions: ChatSessionView[] }).sessions
+    expect(sessions[0]?.modes?.currentModeId).toBe('strict')
+    // The frame is broadcast under the HOST session id the transcript uses, not
+    // the DSH chat id — the two names are joined by chat-list only.
+    expect(restored.sessionId).toBe(sessions[0]?.sessionId)
+  }, 30_000)
+
+  it('settles a parked ExitPlanMode ask when the user picks another mode, and the pick wins', async () => {
+    // The reported "I approved, then changed my mind from the menu": the ask
+    // must be answered (the agent is blocked on it) AND the picked mode must be
+    // what the session ends on — not one of the two restores racing it.
+    await modeTurn('dsh-plan-pick', 'PERM seed')
+    const planSet = modeEvents.length
+    await dispatchRpc(modeManager, 'session/chat-mode-set', { dshSessionId: 'dsh-plan-pick', modeId: 'plan' })
+    await modeWaitFor('session/meta', planSet, event => event.session.modes?.currentModeId === 'plan')
+
+    const since = modeEvents.length
+    const drained = (async () => {
+      for await (const chunk of modeAdapter.stream({
+        provider: 'acp',
+        model: 'moded',
+        sessionId: 'dsh-plan-pick',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'PERMPLAN leave it parked' }] }],
+      })) {
+        void chunk
+      }
+    })()
+    const parked = await modeWaitFor('permission/request', since, event => event.toolName === 'ExitPlanMode')
+    expect(parked.options.map(option => option.kind)).toContain('allow_once')
+
+    await expect(dispatchRpc(modeManager, 'session/chat-mode-set', { dshSessionId: 'dsh-plan-pick', modeId: 'strict' }))
+      .resolves.toEqual({ ok: true, value: { done: true } })
+    await modeWaitFor('permission/resolved', since, event => event.requestId === parked.requestId)
+    await drained
+
+    const listed = await dispatchRpc(modeManager, 'session/chat-list', { dshSessionId: 'dsh-plan-pick' })
+    if (!listed.ok) throw new Error('listing failed')
+    const sessions = (listed.value as { sessions: ChatSessionView[] }).sessions
+    expect(sessions[0]?.modes?.currentModeId).toBe('strict')
+    expect(modeManager.pendingPermissionViews()).toHaveLength(0)
+  }, 30_000)
+
   it('reports the per-chat-session ACP-mode verdict for the composer surfaces', async () => {
     // Without the ACP-mode resolver (an older entry that never wired it) the
     // verdict is false for everything: the surfaces read "not ACP", which is

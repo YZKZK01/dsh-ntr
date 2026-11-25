@@ -29,6 +29,28 @@ export interface LiveSession {
   /** The reasoning effort in force for this session, when one applies. */
   reasoningEffort?: string
   modes?: SessionView['modes']
+  /**
+   * The mode this session was in when it entered `plan` — where an APPROVED
+   * "leave plan mode" ask sends it back.
+   *
+   * CodeBuddy owns the restore (it saves the pre-plan mode in its own process
+   * state) but, unlike codex, never publishes a `current_mode_update` for it:
+   * the plugin's mode mirror would stay on `plan` forever. Recording the mode
+   * we last pushed here is what lets the approval hook mirror the AGENT's
+   * decision back to the browser — one source of truth, both directions.
+   * Absent outside plan; cleared when the session leaves plan any other way
+   * (a user pick), so the approval hook never restores a stale target.
+   */
+  prePlanMode?: string
+  /**
+   * Suppresses the synthesized plan-restore for ONE explicit mode change.
+   *
+   * A user pick while an `ExitPlanMode` ask is still parked has to answer that
+   * ask (otherwise the agent keeps waiting), and that answer looks exactly like
+   * an approval to the ledger callback. The pick wins: the callback must not
+   * mirror its own restore over the mode the user just chose.
+   */
+  suppressPlanRestore?: boolean
   configOptions?: unknown[]
   availableCommands?: SessionView['availableCommands']
   plan?: unknown[]

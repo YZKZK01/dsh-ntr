@@ -987,6 +987,32 @@ const STYLE = `
 .ntr-permission-option:focus-visible, .ntr-permission-cancel:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #2563eb); outline-offset: 2px; }
 .ntr-permission-cancel { margin-left: auto; color: var(--dsw-alias-label-secondary, #6b7280); }
 .ntr-permission-error { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #b91c1c) 12%, transparent); color: var(--dsw-alias-state-error-primary, #b91c1c); font-size: 11px; word-break: break-word; }
+/* A plan-exit ask is a MODE decision wearing a permission card: approve it and
+   the bottom-left mode chip changes. The card says so (hint line) and the accent
+   separates it from an ordinary tool approval. */
+.ntr-permission-card.is-plan-approval { border-left-color: var(--dsw-alias-state-business-primary, #2563eb); }
+.ntr-permission-hint { font-size: 11px; line-height: 1.45; color: var(--dsw-alias-label-secondary, #6b7280); }
+/* ---- Agent mode chip + menu (conversation.input.left, composer-mode.tsx) ---- */
+/* Native-looking chip: quiet border, the mode name, a caret. The menu is a
+   popover anchored above the bottom bar, one row per mode the agent publishes,
+   a check mark on the mode IN FORCE (the agent's list is shown whole: no plugin
+   subset and no invented modes). */
+.ntr-mode { position: relative; display: inline-flex; align-items: center; font-size: 12px; }
+.ntr-mode-button { display: inline-flex; align-items: center; gap: 4px; max-width: 200px; font: inherit; font-size: 12px; line-height: 1.4; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: transparent; color: inherit; cursor: pointer; }
+.ntr-mode-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-active, #0000000d); }
+.ntr-mode-button:disabled { opacity: 0.5; cursor: default; }
+.ntr-mode-button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #2563eb); outline-offset: 2px; }
+.ntr-mode-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ntr-mode-caret { flex: none; font-size: 10px; color: var(--dsw-alias-label-secondary, #6b7280); }
+/* Parked ExitPlanMode ask: the agent is waiting to LEAVE plan mode. */
+.ntr-mode-button.is-plan-pending { border-color: var(--dsw-alias-state-warn-primary, #d97706); color: var(--dsw-alias-state-warn-label, #b45309); }
+.ntr-mode-menu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40; min-width: 200px; max-width: 280px; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 4px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-1, #fff); box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.28); }
+.ntr-mode-option { display: grid; grid-template-columns: 14px 1fr; align-items: baseline; gap: 6px; width: 100%; font: inherit; font-size: 12px; line-height: 1.4; text-align: left; padding: 5px 8px; border-radius: 7px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.ntr-mode-option:hover, .ntr-mode-option:focus-visible { background: var(--dsw-alias-interactive-bg-active, #0000000d); outline: none; }
+.ntr-mode-option.is-selected { font-weight: 600; }
+.ntr-mode-check { color: var(--dsw-alias-state-business-primary, #2563eb); font-size: 11px; }
+.ntr-mode-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ntr-mode-option-desc { grid-column: 2; font-size: 11px; font-weight: 400; color: var(--dsw-alias-label-secondary, #6b7280); }
 /* ---- Released-session banner (conversation.input.dock, released-banner.tsx) ---- */
 /* Same composer-width formula as the permission dock above: the slot spans
    the column, the card lines up with the input box. One row of state + one

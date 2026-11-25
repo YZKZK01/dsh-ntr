@@ -20,9 +20,12 @@
  * conversation, and nothing at all for an agent that declares no modes.
  */
 
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { isPlanExitToolName } from '../protocol.ts'
 import type { AcpSessionHook } from './acp-ui.tsx'
+import { bilingualModeName, planApprovalHint, planApprovalPendingLabel } from './mode-labels.ts'
+import { permissionsForSession } from './store.ts'
 import type { AcpStore } from './store.ts'
 
 /**
@@ -114,6 +117,29 @@ export function AcpComposerMode({ acp, sessionId, useSession }: ComposerModeProp
   // re-read whenever the running flag settles.
   const running = useSession(snapshot => snapshot.running)
   const [switching, setSwitching] = useState(false)
+  // The mode menu is a popover, not a native <select>: the native control was a
+  // bare OS dropdown inside a DSH-looking bottom bar, and it could not carry the
+  // "plan approval pending" state or the check mark that tells the user which
+  // mode is in force (user decision: the mode control must look like the rest of
+  // the bottom bar and must follow the agent in BOTH directions).
+  const [menuOpen, setMenuOpen] = useState(false)
+  const container = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointerDown = (event: MouseEvent): void => {
+      if (container.current !== null && event.target instanceof Node && container.current.contains(event.target)) return
+      setMenuOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuOpen])
 
   useEffect(() => {
     void acp.loadChatSessions(dshSessionId)
@@ -200,40 +226,67 @@ export function AcpComposerMode({ acp, sessionId, useSession }: ComposerModeProp
     shownDefault,
   )
 
+  // Plan-approval state. An `ExitPlanMode` ask IS a mode decision, so the chip
+  // must say the agent is waiting to LEAVE plan mode instead of just naming the
+  // mode it is frozen in (user decision: choosing a mode and being asked for one
+  // must read as the same control).
+  const pendingPlanAsk = permissionsForSession(ui.permissions, dshSessionId)
+    .some(ask => isPlanExitToolName(ask.toolName))
+  const preferZh = acp.prefersZh()
+  const currentName = modes.find(mode => mode.id === current)?.name
+  const currentLabel = bilingualModeName(current, currentName, preferZh)
+  const chipLabel = pendingPlanAsk ? `${currentLabel} · ${planApprovalPendingLabel(preferZh)}` : currentLabel
+  const title = pendingPlanAsk ? `${agentModeTitle(agentId, acp)} ${planApprovalHint(preferZh)}` : agentModeTitle(agentId, acp)
+
+  // No visible "Agent mode" caption (user decision, 2026-10-17): the option
+  // labels are the agent's own mode names, which read as what they are on their
+  // own; the explanation stays in the tooltip. The chip shows the mode IN FORCE
+  // and opens a native-looking menu of every mode the agent publishes (all seven
+  // WorkBuddy modes included — the list is the agent's, never a plugin subset).
   return (
-    <label
-      style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12 }}
-      // No visible "Agent mode" caption (user decision, 2026-10-17): the option
-      // labels are the agent's own mode names (Plan / Accept edits / …), which
-      // read as what they are on their own — a caption beside a single select
-      // only adds a second line of chrome to a control whose value already says
-      // it. The explanation stays in the tooltip for whoever goes looking.
-      title={agentModeTitle(agentId, acp)}
-    >
-      <select
+    <div ref={container} className="ntr-mode">
+      <button
+        type="button"
+        className={`ntr-mode-button${pendingPlanAsk ? ' is-plan-pending' : ''}`}
         aria-label={acp.label('agent 模式', 'agent mode')}
-        value={current}
+        aria-haspopup="listbox"
+        aria-expanded={menuOpen}
+        title={title}
         disabled={switching}
-        onChange={event => {
-          const modeId = event.target.value
-          setSwitching(true)
-          void acp.setChatSessionMode(dshSessionId, modeId, agentId).finally(() => { setSwitching(false) })
-        }}
-        style={{
-          font: 'inherit',
-          fontSize: 12,
-          padding: '2px 4px',
-          borderRadius: 6,
-          border: '1px solid var(--dsw-alias-border-l2, #d1d5db)',
-          background: 'transparent',
-          color: 'inherit',
-          maxWidth: 180,
-        }}
+        onClick={() => { setMenuOpen(open => !open) }}
       >
-        {modes.map(mode => (
-          <option key={mode.id} value={mode.id}>{mode.name ?? mode.id}</option>
-        ))}
-      </select>
-    </label>
+        <span className="ntr-mode-value">{chipLabel}</span>
+        <span className="ntr-mode-caret" aria-hidden="true">▾</span>
+      </button>
+      {menuOpen && (
+        <div className="ntr-mode-menu" role="listbox" aria-label={acp.label('agent 模式', 'agent mode')}>
+          {modes.map(mode => {
+            const selected = mode.id === current
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`ntr-mode-option${selected ? ' is-selected' : ''}`}
+                title={mode.description}
+                onClick={() => {
+                  setMenuOpen(false)
+                  if (selected) return
+                  setSwitching(true)
+                  void acp.setChatSessionMode(dshSessionId, mode.id, agentId).finally(() => { setSwitching(false) })
+                }}
+              >
+                <span className="ntr-mode-check" aria-hidden="true">{selected ? '✓' : ''}</span>
+                <span className="ntr-mode-option-name">{bilingualModeName(mode.id, mode.name, preferZh)}</span>
+                {mode.description !== undefined && mode.description !== '' && (
+                  <span className="ntr-mode-option-desc">{mode.description}</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

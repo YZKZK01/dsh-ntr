@@ -33,6 +33,7 @@ import type {
   AcpConversationChoice,
   LlmModelReasoningInfo,
 } from '../protocol.ts'
+import { PLAN_MODE_ID } from '../protocol.ts'
 import type { AcpModeResolver, DisplayedChatDefaults } from './types.ts'
 import { routeBindingRegistry } from './registries.ts'
 import type { LiveSession } from './turn-stream.ts'
@@ -653,6 +654,31 @@ export class ChatChoiceService {
     // thought level follow (user decision, 2026-10-18 — every control in the
     // bottom bar remembers its last choice, not just the thought level).
     this.patchChatChoice(dshSessionId, { agentId: target.agentId, mode: modeId })
+  }
+
+  /**
+   * Record a mode the PLUGIN settled — today only the plan-approval restore.
+   *
+   * When an `ExitPlanMode` ask is approved the AGENT leaves plan mode, but
+   * codebuddy publishes no `current_mode_update` for that restore. Without this
+   * record the conversation would keep `mode: plan` in `agents.json`, and the
+   * next resume would apply `session/set_mode plan` to an agent that had
+   * already left it — the mode panel would silently disagree with the agent
+   * after every restart.
+   *
+   * Never invoked for a user pick: `setChatSessionMode` records those itself,
+   * after the agent accepted them.
+   */
+  recordSettledMode(session: LiveSession, modeId: string): void {
+    const dshSessionId = session.dshSessionId
+    if (dshSessionId === undefined) return
+    const current = this.picks.get(dshSessionId)
+    // Only a record that actually said `plan` needs the correction; anything
+    // else (an `/acp`-RPC-only conversation, a pick that raced ahead) already
+    // names the mode its owner chose, and overwriting it would be this
+    // callback inventing a choice the user never made.
+    if (current?.mode !== PLAN_MODE_ID) return
+    this.patchChatChoice(dshSessionId, { mode: modeId })
   }
 
   /**

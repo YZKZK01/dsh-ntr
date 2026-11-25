@@ -80,14 +80,17 @@ NTR 底座（`conversation.input.model`，`AcpSessionControls`）**只作首轮�
 
 ## 4. agent mode 控件
 
-注册在 `conversation.input.left`（`src/client/composer-mode.tsx`），调用 agent 自己的 `session/set_mode`。
+注册在 `conversation.input.left`（`src/client/composer-mode.tsx`），调用 agent 自己的 `session/set_mode`。控件是**原生样式的 chip + 弹层菜单**（不再是 `<select>`）：chip 显示当前模式名，点开列出 agent 发布的**全部**模式（codebuddy 7 档：Always Ask / Accept Edits / Plan / Auto / Don't Ask / Bypass Permissions / Full Access），当前项带勾，agent 自带的 `description` 作为副行。
 
-- **不写可见标签**：agent 下发的 mode 名自解释（omp `Default`/`Plan`，codebuddy `Always Ask`/`Accept Edits`/…）。解释留在 `title` 与 `aria-label`（可访问性不能删）。
+- **不写说明性 caption**（保留旧决策的意图：agent 自己的 mode 名自解释），但 chip 必须显示模式名——它还要承载「待批准退出」这一状态；完整解释留在 `title` / `aria-label`（可访问性不能删）。中文界面优先 `mode-labels.ts` 的译名，未知 id 回落 agent 名（不发明模式）。
 - **选项不依赖活会话**：先取活会话的 `modes`，没有时回落 `agent/catalog` 的 `mode`（探测来的 `category: 'mode'` select，与 `session/new` 同源）。
 - **显示的值就是首轮要跑的值**：没有 pick 时它优先显示 `AcpAgentDef.defaultMode`（设置页「高级」的新对话默认），没有才回落 `catalog.mode.currentValue`（那可能是同一 agent 别的会话抬上来的）；released 行的 parked mode 低于这个默认（下次 resume 会应用它），live 行仍是权威。`displayedChatDefaults` / `seedChatChoiceFromCatalog` 必须在 `session/new` 前捕获并把它写成会话的 pick（与 model / effort 同一契约，见 [state.md §3](./state.md)），否则就是「下拉写着 Bypass、首轮跑 Always Ask」。
 - **控件是否出现由「agent 发布了什么轴」决定，不能由「用户点过什么」决定**。`describeRoute` 让 `modelLabel` 只在有 pick 时才有值是真实回归：只点过思考等级的会话整块模型 chip 消失。配套：`agentCatalog` 必须同时回 `currentModel` 与 `mode`。
 - **自带 ACP 闸门**（`agentModeVisible`：显式 `ui.acpMode === false` 压过残留活会话行，`undefined` 时活会话才算证据；且 `!isAcp` 时整个控件 `return null`，残留活会话的 `availableModes` **不放行**）：它在 `conversation.input.left`，不在 `syncAcpMode` 的 claim 生命周期里，而 `agentId` 会回落到插件默认 `defaultAgent`，不闸就是普通会话凭空多一个 ACP 控件。
 - `setChatSessionMode` 对没有活会话**或已释放**的会话只记录 pick、不 spawn（与 `setChatSessionModel` 一致；2026-10-30 起 released 不再先 resume，见 §3「只记录、不唤醒」），`applyChatChoice` 在建 / 恢复会话时再应用。
+- **双向单源**：agent 推的 `current_mode_update` 与插件为「批准后退出计划」合成的那一帧都写进 `chatSessions` 行（`src/client/store/mode-sync.ts`），chip 立即跟随，不再等下一次 `chat-list`。host 侧 `src/bridge/plan-approval.ts` 记录 `prePlanMode`、合成该帧并把 pick 落盘（`ChatChoiceService.recordSettledMode`），resume 不会把已退出的 plan 又应用回去；`src/protocol/plan-mode.ts` 的 `isPlanExitToolName` 是两侧共用的唯一判定。
+- **选择即权威（严格边界）**：菜单选择走 `session/chat-mode-set`。若 `ExitPlanMode` 询问还挂着，host 先用 `allow_once` 结算它（agent 被它阻塞，否则切换要等到 60s 期限），并压掉 agent 自己的 restore，最终 mode 就是用户选的那个；批准后反悔再选 plan / 其它模式同样立即生效。
+- **询问挂起时 chip 随状态变**：显示「计划 · 待批准退出」并高亮（`planApprovalPendingLabel`），文案与权限卡同源（[permissions.md §3](./permissions.md) 的计划退出段），避免「一张普通权限卡悄悄改了模式」。
 - 该 series 的公开 `.d.ts` 里 slot 条目**不含 `owner` 字段**（`OwnerOf` 解析为 `object`），所以组件里声明结构类型（`ComposerModeProps`），注册处 `as unknown as SlotComponent<any>`；新增 client 模块依赖要加进 package.json 的 `dsh.client.inject`。
 
 ### 4.1 composer 上下文占用环（`conversation.composer.dock`）

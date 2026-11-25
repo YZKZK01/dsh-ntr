@@ -6,6 +6,7 @@
 import type { AcpStore, UiState } from '../store.ts'
 import type { Translate } from '../acp-view.tsx'
 import type { AgentTestResult } from '../../protocol.ts'
+import { isPlanExitToolName } from '../../protocol.ts'
 import { bilingualLiteral, bilingualPermissionOption } from '../permission-labels.ts'
 
 /**
@@ -140,6 +141,9 @@ export function PermissionMirrorCard(props: { acp: AcpStore; ui: UiState }) {
         <div key={permission.requestId} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
           <span style={{ flex: 1, minWidth: 160 }}>
             <span style={{ fontWeight: 600 }}>{permission.toolName}</span>
+            {isPlanExitToolName(permission.toolName) && (
+              <span style={{ color: 'var(--ntr-muted)' }}> · {bilingualLiteral('计划 · 待批准退出', 'Plan · awaiting exit approval', preferZh)}</span>
+            )}
             {permission.reason !== undefined && (
               <span style={{ color: 'var(--ntr-muted)' }}> · {permission.reason}</span>
             )}

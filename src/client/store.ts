@@ -28,6 +28,7 @@ import { AgentAdminService } from "./store/agent-admin.ts"
 import { CatalogService } from "./store/catalog.ts"
 import { ChatChoiceService } from "./store/chat-choice.ts"
 import { ChatSessionsService } from "./store/chat-sessions.ts"
+import { currentModeOfBatch, withSessionCurrentMode } from "./store/mode-sync.ts"
 import { LogService } from "./store/log.ts"
 import { SaveBannersService } from "./store/save-banners.ts"
 import { SettingsService } from "./store/settings.ts"
@@ -279,14 +280,13 @@ export class AcpStore {
         if (folded !== undefined) subagentDetails = folded
       }
       // `usage_update` is state, not stream content: it never becomes a block,
-      // but both observed snapshots that carry usage must move with it —
-      // otherwise the ACP view header and the composer's occupancy ring only
-      // refresh when some other RPC re-reads the session.
+      // but both snapshots that carry usage must move with it.
       const usage = usageOfBatch(items)
       if (usage !== undefined) chatSessions = withSessionUsage(chatSessions, sessionId, usage)
-      // The observed transcript folds every frame (a watched session's cards
-      // and prose); blocks are copied only when something actually changed, so
-      // a usage-only tick costs one record object, not a re-render payload.
+      const modeId = currentModeOfBatch(items)
+      if (modeId !== undefined) chatSessions = withSessionCurrentMode(chatSessions, sessionId, modeId)
+      // The observed transcript folds every frame; blocks are copied only when
+      // something actually changed (a usage-only tick copies one record).
       const record = chatTranscripts[sessionId]
       if (record !== undefined) {
         let changed = false

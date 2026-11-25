@@ -367,12 +367,9 @@ export class BridgeManager {
       persistAgentsStrict: () => { this.persistence.persistAgents(true) },
       syncDelegateRegistration: () => { this.delegateRegistration?.sync() },
     })
-    // The chat-choice cluster (see `ChatChoiceService`) needs the roster, the
-    // catalog reads, the session set, the holder of a session, the two lock
-    // readers and the state-file write; every one is a closure so the service
-    // never imports this module. The pick map itself is owned by the session
-    // registry and passed BY REFERENCE: the lock helpers and the `agents.json`
-    // payload read and write it there.
+    // The chat-choice cluster (see `ChatChoiceService`): every capability is a
+    // closure, and the persisted pick map is passed BY REFERENCE (it is
+    // serialized with `agents.json` by the session registry).
     this.choices = new ChatChoiceService({
       hub: this.hub,
       defOf: agentId => this.defsMap.get(agentId),
@@ -512,7 +509,7 @@ export class BridgeManager {
     onSessionsDirty?: () => void,
     onForkCapability?: (agentId: string, supported: boolean) => void,
   ): AgentBridge {
-    return new AgentBridge(def, this.hub, this.transcriptMax, onConnectionLost, onCatalog, onCommands, this.tuning, () => this.sessionWorkspaceResolver, onSessionsDirty, onForkCapability, bridge => {
+    const bridge = new AgentBridge(def, this.hub, this.transcriptMax, onConnectionLost, onCatalog, onCommands, this.tuning, () => this.sessionWorkspaceResolver, onSessionsDirty, onForkCapability, bridge => {
       this.bridgeRegistry.publishAgentStatus(bridge.def.id)
       this.bridgeRegistry.noticeBridgeFailure(bridge)
     }, (session, update) => this.subagents.trackSessionBackgroundDispatch(session, update), (session, update) => this.subagents.trackBackgroundDrainText(session, update), (session, status) => {
@@ -527,6 +524,9 @@ export class BridgeManager {
       // the launch command line; tests: the injected seam).
       if (this.lateOutput.isAgentFor(session.agentId)) this.subagents.trackAgyDispatch(session, update)
     }, () => this.tuning.skillsMcpEnabled)
+    // A plugin-settled mode (plan restore) must reach the persisted chat choice.
+    bridge.onModeSettled = (session, modeId) => { this.choices.recordSettledMode(session, modeId) }
+    return bridge
   }
 
   /**

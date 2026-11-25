@@ -166,6 +166,11 @@ to the config file"、"adopts a deadline the settings page writes while a sessio
 - **堆叠**：多条询问按**到达顺序、最旧在上**堆叠；容器由 CSS 限高（`min(38vh, 320px)`）并滚动，一串询问不会把 composer 顶出屏幕。
 - **无聊天身份**：永不进入 dock；它们只出现在设置页镜像。
 
+**计划退出询问（`ExitPlanMode`）是模式决定**：它不是普通工具授权，批准它就离开了 plan 模式——宿主可能因此合成一帧 `current_mode_update`（codebuddy 自己不发）并把会话的 mode pick 改成进入 plan 前的模式。因此卡片必须说清：
+- 标题在双语下写作「计划 · 待批准退出」（`src/protocol/plan-mode.ts` 的 `isPlanExitToolName` 统一判定，host 与浏览器同一把尺），原始 agent 标题保留在 `title` 里可查；设置页镜像同样加这半句话。
+- 卡片多一行 `permission-hint` 说明「批准后回到进入计划前的模式；超时按当前时限自动处理」（`src/client/mode-labels.ts` 的 `planApprovalHint`）。时限本身不变：60s `abort` 是用户指定，不是 bug。
+- 询问挂起期间左下角 mode chip 显示「计划 · 待批准退出」并高亮；从菜单另选模式会先把这条询问按「允许一次」结算（agent 卡在它上面），再以用户的选择为准——见 [ui.md §4](./ui.md) 与 `src/bridge/plan-approval.ts`。
+
 **设置页镜像**（`src/client/panel/permission-mirror.tsx` · `permissionLedgerCard` / `PermissionMirrorCard`）：只要 `ui.permissions` 非空就渲染可答复的跨会话列表，提示语说明「对话打开时在那边的卡片上回答；这里兜底显示其他会话的询问」。它不再是唯一入口，也不是降级路径——`approvalRouted` / `fellBackFromConversation` 已删除，`agents/list` 不再带审批能力旗标。
 
 **设置页没有权限开关**：agent 卡不再提供「权限策略 / 要不要问人」。要不要问由 agent 自己的 mode 决定，问了就一定会到人面前（显式选择 `auto` + `0` 的部署除外，它按 §2.1 代答）。

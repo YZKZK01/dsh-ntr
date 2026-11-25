@@ -41,6 +41,7 @@ import type {
   PermissionTimeoutMode,
   SessionView,
 } from '../protocol.ts'
+import { applySessionMode, settleApprovedPlanAsk } from './plan-approval.ts'
 import { mergeUsageSample } from '../usage.ts'
 import {
   PLUGIN_VERSION,
@@ -99,38 +100,27 @@ export class AgentBridge {
   stderrTail: string[] = []
   /** Facts about the LAST start attempt — see {@link StartAttempt}. */
   startAttempt?: StartAttempt
-  /**
-   * The child the current start attempt spawned.
-   *
-   * Held separately from {@link child} because `killChild` clears THAT one the
-   * moment a start fails, and the exit facts of the child are exactly what a
-   * failed connection test has to report (see `awaitStartChildExit`).
-   */
+  /** The start attempt's child: kept apart from {@link child} because a failed
+   * connection test still has to report ITS exit facts (`awaitStartChildExit`). */
   private startChild?: ChildProcess
 
   private child?: ChildProcess
   private conn?: ClientConnection
   /**
    * Teardown generation, bumped ONLY by a deliberate teardown (`stop` /
-   * `shutdown` / `forceReset`), so a start that was already in flight can tell
-   * that nobody owns its outcome any more: `spawnAndConnect` re-checks this
-   * after each await and disposes the child it would otherwise have published
-   * as `ready`. Without it, a teardown landing during `ensureAgentExecutable`
-   * (a global npm install can take minutes) left a freshly spawned agent
-   * running with no owner.
-   *
-   * `releaseAll` and `killChild` deliberately do NOT bump it: both are also the
-   * failure path of a start's own handshake — a child dying during startup goes
-   * `exit` → `connectionLost` → `releaseAll('died')` — and that start must
-   * still publish `error` with its stderr tail rather than be mistaken for a
-   * teardown (see `ensureReady`). It cannot leak a process either way: a crash
-   * release only happens once the child exists, and `spawnAndConnect` has no
-   * spawn point left after that.
+   * `shutdown` / `forceReset`), so an in-flight start can tell that nobody owns
+   * its outcome: `spawnAndConnect` re-checks it after each await and disposes the
+   * child it would otherwise publish as `ready`. `releaseAll` / `killChild` do
+   * NOT bump it — they are also a start's own failure path, which must still
+   * publish `error` with its stderr tail (`ensureReady`); they cannot leak a
+   * process because a crash release only happens once the child exists.
    */
   private teardownEpoch = 0
   private starting?: Promise<void>
   private readonly sessions = new Map<string, LiveSession>()
   private readonly acpIndex = new Map<string, LiveSession>()
+  /** Mirror a plugin-settled mode (plan approval restore) into the chat choice. */
+  onModeSettled?: (session: LiveSession, modeId: string) => void
   /** Sessions whose process died but whose ACP id can be resumed via `session/load`. */
   private readonly released = new Map<string, LiveSession>()
   /** Inflight `session/load` resumes, shared so concurrent prompts don't double-resume. */
@@ -1619,11 +1609,15 @@ export class AgentBridge {
   async setMode(session: LiveSession, modeId: string): Promise<void> {
     const conn = this.conn
     if (conn === undefined) throw new AcpError('agent_unreachable', 'acp: connection is not open')
-    await this.runCommand(session, () => conn.agent.request(methods.agent.session.setMode, { sessionId: session.acpSessionId, modeId }))
-    // Well-behaved agents push `current_mode_update`, but the spec does not
-    // require it — apply locally so the browser selector never goes stale.
-    if (session.modes !== undefined) session.modes = { ...session.modes, currentModeId: modeId }
-    this.publishMeta(session)
+    // Plan bookkeeping lives in `plan-approval.ts` (the file is line-locked):
+    // a pick answers a parked exit ask, and entering plan records where from.
+    await applySessionMode(session, modeId, {
+      requestMode: async () => {
+        await this.runCommand(session, () => conn.agent.request(methods.agent.session.setMode, { sessionId: session.acpSessionId, modeId }))
+      },
+      broadcast: event => this.hub.broadcast(event),
+      publishMeta: () => this.publishMeta(session),
+    }, this.permissions)
   }
 
   async setConfigOption(session: LiveSession, configId: string, value: string | boolean): Promise<void> {
@@ -1906,6 +1900,10 @@ export class AgentBridge {
         resolve(outcome.outcome === 'selected'
           ? { outcome: { outcome: 'selected', optionId: outcome.optionId } }
           : { outcome: { outcome: 'cancelled' } })
+        // An approved ExitPlanMode leaves plan without an agent frame.
+        settleApprovedPlanAsk(session, toolCall, optionViews, outcome,
+          event => this.hub.broadcast(event), () => this.publishMeta(session),
+          modeId => { this.onModeSettled?.(session, modeId) })
       }, view)
       // The live frame and the replay frame come from ONE builder, so a
       // reconnecting client receives exactly what a live one did.
@@ -2001,6 +1999,10 @@ export class AgentBridge {
   ): RequestPermissionResponse {
     session.lastAgentActivityAt = Date.now()
     const outcome = this.announceExpiredAsk(session, mode, toolCall, options, timeoutMs)
+    // Zero-window `auto` answers plan exit without a card; mirror it too.
+    settleApprovedPlanAsk(session, toolCall, options, outcome,
+      event => this.hub.broadcast(event), () => this.publishMeta(session),
+      modeId => { this.onModeSettled?.(session, modeId) })
     return outcome.outcome === 'selected'
       ? { outcome: { outcome: 'selected', optionId: outcome.optionId } }
       : { outcome: { outcome: 'cancelled' } }

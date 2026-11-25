@@ -1654,14 +1654,14 @@ const app = agent({ name: 'mock-acp-agent' })
     await sendOpeningToolCard(send, text, { sessionUpdate: 'tool_call', toolCallId: MAIN_CALL_ID, title: MAIN_TITLE, kind: 'other', status: 'pending' })
 
     if (text.includes('PERM')) {
-      // `PERMEDIT` / `PERMEXEC` declare the ACP tool-call kind and
-      // `PERMLOC:<path>` the write locations, so host tests can exercise the
-      // DSH access-mode mapping (kind classification + workspace containment).
+      // `PERMEDIT` / `PERMEXEC` declare the ACP tool-call kind and `PERMLOC:<path>`
+      // the write locations (host access-mode mapping); `PERMPLAN` raises the
+      // plan-exit ask (`ExitPlanMode` title, no restore frame after approval).
       const kind = text.includes('PERMEDIT') ? 'edit' : text.includes('PERMEXEC') ? 'execute' : undefined
       const location = /PERMLOC:(\S+)/.exec(text)
       const toolCall = {
         toolCallId: 'call_1',
-        title: 'mock dangerous operation',
+        title: text.includes('PERMPLAN') ? 'ExitPlanMode' : 'mock dangerous operation',
         ...(kind === undefined ? {} : { kind }),
         ...(location === null ? {} : { locations: [{ path: location[1] }] }),
       }

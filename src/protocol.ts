@@ -188,6 +188,10 @@ export type {
 
 export { effectiveExposedModels } from './protocol/catalog.ts'
 
+// ---- Plan mode: one vocabulary for the host's approval hook and the browser ----
+
+export { PLAN_MODE_ID, isPlanExitToolName } from './protocol/plan-mode.ts'
+
 export type {
   GenerateMessage,
   GenerateMessageSource,

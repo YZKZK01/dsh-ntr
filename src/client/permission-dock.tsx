@@ -25,7 +25,9 @@
 
 import { useEffect, useState } from 'react'
 import { ensureAcpStyle, useUi } from './acp-ui.tsx'
+import { planApprovalHint } from './mode-labels.ts'
 import { bilingualLiteral, bilingualPermissionOption } from './permission-labels.ts'
+import { isPlanExitToolName } from '../protocol.ts'
 import {
   deadlineRemainingLabel,
   PERMISSION_DEADLINE_EXPIRED,
@@ -76,6 +78,12 @@ function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission
   const [error, setError] = useState<string>()
   const remaining = deadlineRemainingLabel(permission.deadlineAt, now, permission.timeoutMode)
   const expired = remaining === PERMISSION_DEADLINE_EXPIRED
+  // An `ExitPlanMode` ask is not an ordinary tool grant: approving it CHANGES
+  // the mode (the chip in the left corner moves back to the pre-plan mode), and
+  // an unanswered one is resolved by the same deadline as any other ask. The
+  // card has to say that in so many words — it was reported as "a permission
+  // question that silently switched my mode".
+  const planApproval = isPlanExitToolName(permission.toolName)
   const respond = (optionId?: string): void => {
     if (busy) return
     setBusy(true)
@@ -90,9 +98,13 @@ function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission
       .finally(() => { setBusy(false) })
   }
   return (
-    <div className="ntr-permission-card">
+    <div className={`ntr-permission-card${planApproval ? ' is-plan-approval' : ''}`}>
       <div className="ntr-permission-head">
-        <span className="ntr-permission-tool">{permission.toolName}</span>
+        <span className="ntr-permission-tool" title={permission.toolName}>
+          {planApproval
+            ? bilingualLiteral('计划 · 待批准退出', 'Plan · awaiting exit approval', preferZh)
+            : permission.toolName}
+        </span>
         {permission.reason !== undefined && (
           <span className="ntr-permission-reason" title={permission.reason}>{permission.reason}</span>
         )}
@@ -104,6 +116,9 @@ function PermissionAskCard(props: { acp: AcpStore; permission: PendingPermission
           </span>
         )}
       </div>
+      {planApproval && (
+        <div className="ntr-permission-hint">{planApprovalHint(preferZh)}</div>
+      )}
       <div className="ntr-permission-actions">
         {permission.options.map(option => (
           <button
