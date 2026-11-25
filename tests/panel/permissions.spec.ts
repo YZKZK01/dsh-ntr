@@ -12,19 +12,21 @@ describe('AcpSettingsSection permissions', () => {
     else await category(page)
     await act(async () => { await fixture.applyEvent(permission()) })
     expect(screen.getByText('Edit project file')).toBeDefined()
+    // The options stay the agent's own, with the missing language half appended
+    // (user decision: bilingual card) — order is still the agent's order.
     const optionNames = screen.getAllByRole('button').map(button => button.textContent)
-      .filter(name => ['Allow once', 'Always Allow', 'Reject once'].includes(name ?? ''))
-    expect(optionNames).toEqual(['Allow once', 'Always Allow', 'Reject once'])
-    await click(screen.getByRole('button', { name: 'Always Allow' }))
+      .filter(name => ['本次允许（Allow once）', '始终允许（Always Allow）', '拒绝本次（Reject once）'].includes(name ?? ''))
+    expect(optionNames).toEqual(['本次允许（Allow once）', '始终允许（Always Allow）', '拒绝本次（Reject once）'])
+    await click(screen.getByRole('button', { name: '始终允许（Always Allow）' }))
     expect(payloads(fixture, 'permission/respond')).toEqual([{ requestId: 'ask-edit', optionId: 'always' }])
-    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '始终允许（Always Allow）' })).toBeNull()
 
     // An RPC-only ask has no conversation identity, but must still be answerable.
     await act(async () => { await fixture.applyEvent(permission({ requestId: 'ask-cancel', dshSessionId: undefined })) })
     await category(page === '对话外观' ? '智能体' : '对话外观')
-    expect(screen.getByRole('button', { name: 'Reject once' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝本次（Reject once）' })).toBeDefined()
     // Independent cancellation must not select the agent's rejection option.
-    await click(screen.getByRole('button', { name: '取消' }))
+    await click(screen.getByRole('button', { name: '取消（Cancel）' }))
     expect(payloads(fixture, 'permission/respond')).toEqual([
       { requestId: 'ask-edit', optionId: 'always' }, { requestId: 'ask-cancel' },
     ])

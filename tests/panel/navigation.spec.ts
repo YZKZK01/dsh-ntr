@@ -281,7 +281,7 @@ describe('AcpSettingsSection navigation', () => {
     expect(within(nav).getAllByRole('button').map(button => button.textContent)).toEqual(['智能体', '技能', '进程管理', '对话外观', '日志'])
     expect(screen.queryByRole('slider', { name: '等待时长', hidden: true })).toBeNull()
     await category('对话外观')
-    expect(screen.getByRole('button', { name: 'Always Allow' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '始终允许（Always Allow）' })).toBeDefined()
   })
 
   it('keeps normal preset provenance behind View diagnostics', async () => {
