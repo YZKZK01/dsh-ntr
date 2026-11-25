@@ -55,7 +55,7 @@ export function selectForwardPrompt(messages: readonly {
     if (message.role !== 'user') continue
     sawUserRole = true
     const kind = message.source?.kind
-    if (kind !== undefined && kind !== 'user') continue
+    if (kind !== undefined && kind !== 'user' && kind !== 'agent-message') continue
 
     const content = message.content ?? (message as { parts?: unknown }).parts
     const rawBlocks: Array<Record<string, unknown>> = Array.isArray(content)

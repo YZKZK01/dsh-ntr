@@ -264,7 +264,7 @@ export function isAcpToolContinuation(messages: readonly {
     const kind = messages[i]?.source?.kind
     // A source-less message counts as user input — the same convention
     // `selectForwardPrompt` uses for hand-built requests.
-    if (kind === undefined || kind === 'user') return false
+    if (kind === undefined || kind === 'user' || kind === 'agent-message') return false
   }
   return true
 }

@@ -22,7 +22,18 @@ export const PLUGIN_VERSION: string = (() => {
  * conversation needs its own child process. Every other agent multiplexes any
  * number of sessions over one process and stays on the agent-wide bridge.
  */
-export const PER_SESSION_AGENT_IDS: ReadonlySet<string> = new Set(['codebuddy'])
+/**
+ * Extra agent ids that need one child process per DSH conversation, without a
+ * source edit: `DSH_NTR_PER_SESSION_IDS=workbuddy,other` (comma separated).
+ * A deployment that runs the same ACP host under its own agent id (the
+ * CodeBuddy CLI registered as `workbuddy` is the common case) opts in here.
+ */
+function envPerSessionAgentIds(): readonly string[] {
+  const raw = process.env.DSH_NTR_PER_SESSION_IDS
+  if (raw === undefined || raw === '') return []
+  return raw.split(',').map((id) => id.trim()).filter((id) => id !== '')
+}
+export const PER_SESSION_AGENT_IDS: ReadonlySet<string> = new Set(['codebuddy', 'workbuddy', ...envPerSessionAgentIds()])
 
 /** True when this agent gets one child process per DSH session (A1). */
 export function isPerSessionAgent(agentId: string): boolean {
