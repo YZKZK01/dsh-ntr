@@ -502,8 +502,8 @@ describe('the advanced base collects the agent’s remaining config options', ()
     expect(menu.sections.map(section => section.id)).toEqual(['config:temp', 'config:brave', 'config:stream'])
     expect(menu.sections[0]).toMatchObject({ title: 'Temperature' })
     expect(menu.sections[0]?.items).toEqual([
-      { id: 'low', label: 'Low', active: false },
-      { id: 'high', label: 'High', active: true },
+      { id: 'low', label: '低（Low）', active: false },
+      { id: 'high', label: '高（High）', active: true },
     ])
   })
 
@@ -659,9 +659,9 @@ describe('the thought card offers a fetch only for a model nobody has seen', () 
 
   it('keeps the level in force when the record has it', () => {
     // The fetch changes the CATALOG, not the pick: a known model keeps showing
-    // the user's level, and the card's row labels it as before.
+    // the user's level, and the card's row labels it in both languages.
     const route = routeFor('pi@full', 'max')
     expect(route.effortLabel).toBe('Max')
-    expect(thoughtChip(route, acp).label).toBe('思考 · Max')
+    expect(thoughtChip(route, acp).label).toBe('思考 · 最大（Max）')
   })
 })

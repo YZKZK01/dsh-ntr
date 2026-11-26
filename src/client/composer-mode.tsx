@@ -24,7 +24,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { isPlanExitToolName } from '../protocol.ts'
 import type { AcpSessionHook } from './acp-ui.tsx'
-import { bilingualModeName, planApprovalHint, planApprovalPendingLabel } from './mode-labels.ts'
+import { bilingualModeName, bilingualModeOption, planApprovalHint, planApprovalPendingLabel } from './mode-labels.ts'
+import { bilingualDetail } from './config-labels.ts'
 import { permissionsForSession } from './store.ts'
 import type { AcpStore } from './store.ts'
 
@@ -269,7 +270,10 @@ export function AcpComposerMode({ acp, sessionId, useSession }: ComposerModeProp
                 role="option"
                 aria-selected={selected}
                 className={`ntr-mode-option${selected ? ' is-selected' : ''}`}
-                title={mode.description}
+                // The agent's description is a TOOLTIP only (user decision: the
+                // menu lists modes, it is not a manual — the old visible detail
+                // line wrapped every row into a paragraph).
+                title={bilingualDetail(mode.description)}
                 onClick={() => {
                   setMenuOpen(false)
                   if (selected) return
@@ -278,10 +282,7 @@ export function AcpComposerMode({ acp, sessionId, useSession }: ComposerModeProp
                 }}
               >
                 <span className="ntr-mode-check" aria-hidden="true">{selected ? '✓' : ''}</span>
-                <span className="ntr-mode-option-name">{bilingualModeName(mode.id, mode.name, preferZh)}</span>
-                {mode.description !== undefined && mode.description !== '' && (
-                  <span className="ntr-mode-option-desc">{mode.description}</span>
-                )}
+                <span className="ntr-mode-option-name">{bilingualModeOption(mode.id, mode.name, preferZh)}</span>
               </button>
             )
           })}

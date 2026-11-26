@@ -1012,7 +1012,6 @@ const STYLE = `
 .ntr-mode-option.is-selected { font-weight: 600; }
 .ntr-mode-check { color: var(--dsw-alias-state-business-primary, #2563eb); font-size: 11px; }
 .ntr-mode-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ntr-mode-option-desc { grid-column: 2; font-size: 11px; font-weight: 400; color: var(--dsw-alias-label-secondary, #6b7280); }
 /* ---- Released-session banner (conversation.input.dock, released-banner.tsx) ---- */
 /* Same composer-width formula as the permission dock above: the slot spans
    the column, the card lines up with the input box. One row of state + one

@@ -14,8 +14,8 @@
 
 /** Chinese reading per agent mode id (lowercased for the match). */
 const MODE_ZH: Record<string, string> = {
-  default: '默认（每次询问）',
-  'always ask': '默认（每次询问）',
+  default: '默认',
+  'always ask': '默认',
   acceptedits: '接受编辑',
   'accept edits': '接受编辑',
   plan: '计划',
@@ -45,6 +45,22 @@ export function bilingualModeName(modeId: string, agentName: string | undefined,
   const own = agentName !== undefined && agentName.trim() !== '' ? agentName : modeId
   if (!preferZh) return own
   return modeLabelZh(modeId) ?? own
+}
+
+/**
+ * The MENU row's label: both languages, Chinese first, the agent's own name in
+ * parentheses (`接受编辑（Accept Edits）`).
+ *
+ * The chip keeps the short form ({@link bilingualModeName}) — a chip sits in
+ * one line of the composer bar — while the menu has room for the pair, which is
+ * what makes the agent's vocabulary legible to a user who thinks in Chinese.
+ */
+export function bilingualModeOption(modeId: string, agentName: string | undefined, preferZh: boolean): string {
+  const own = agentName !== undefined && agentName.trim() !== '' ? agentName : modeId
+  if (!preferZh) return own
+  const zh = modeLabelZh(modeId)
+  if (zh === undefined) return own
+  return zh === own ? own : `${zh}（${own}）`
 }
 
 /**

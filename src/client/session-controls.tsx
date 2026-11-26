@@ -72,6 +72,7 @@ import type {
 import type { AcpConversationChoice, AcpTagHalo, AgentCatalogResult, AgentView, ChatSessionView } from '../protocol.ts'
 import { reasoningForModel, thoughtLevelsUnknown } from './route-reasoning.ts'
 import { FETCH_THOUGHT_ITEM, thoughtChip, thoughtSection } from './thought-card.ts'
+import { bilingualDetail, bilingualLabel } from './config-labels.ts'
 
 /**
  * Props every entry in this file receives: the injected face (built in
@@ -659,7 +660,7 @@ export function AcpSessionControls(props: AcpClusterProps) {
         <AcpChip
           label={`${acp.label('高级', 'Advanced')} · ${String(extras.length)}`}
           title={acp.label(
-            `agent 的额外配置项：${extras.map(option => option.name).join('、')}`,
+            `agent 的额外配置项：${extras.map(option => bilingualLabel(option.name)).join('、')}`,
             `extra agent config options: ${extras.map(option => option.name).join(', ')}`,
           )}
           active={menu?.sessionId === sessionId && menu.kind === 'advanced'}
@@ -903,16 +904,16 @@ function advancedSections(context: MenuContext): AcpMenuSection[] {
       const checked = option.value === 'true'
       return {
         id: `config:${option.configId}`,
-        items: [{ id: checked ? 'false' : 'true', label: option.name, active: checked, checkbox: true }],
+        items: [{ id: checked ? 'false' : 'true', label: bilingualLabel(option.name), active: checked, checkbox: true }],
       }
     }
     return {
       id: `config:${option.configId}`,
-      title: option.name,
+      title: bilingualLabel(option.name),
       items: option.choices.map(choice => ({
         id: choice.id,
-        label: choice.name,
-        ...(choice.description === undefined ? {} : { detail: choice.description }),
+        label: bilingualLabel(choice.name),
+        ...(choice.description === undefined ? {} : { detail: bilingualDetail(choice.description) }),
         active: choice.id === option.value,
       })),
     }

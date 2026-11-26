@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   bilingualModeName,
+  bilingualModeOption,
   modeLabelZh,
   planApprovalHint,
   planApprovalPendingLabel,
@@ -18,7 +19,7 @@ import {
 
 describe('modeLabelZh', () => {
   it('covers the seven WorkBuddy mode ids', () => {
-    expect(modeLabelZh('default')).toBe('默认（每次询问）')
+    expect(modeLabelZh('default')).toBe('默认')
     expect(modeLabelZh('acceptEdits')).toBe('接受编辑')
     expect(modeLabelZh('plan')).toBe('计划')
     expect(modeLabelZh('auto')).toBe('自动')
@@ -59,6 +60,23 @@ describe('bilingualModeName: the agent name stays the fallback', () => {
     expect(bilingualModeName('acceptEdits', undefined, false)).toBe('acceptEdits')
     expect(bilingualModeName('acceptEdits', '  ', false)).toBe('acceptEdits')
     expect(bilingualModeName('acceptEdits', undefined, true)).toBe('接受编辑')
+  })
+})
+
+describe('bilingualModeOption: the menu row carries both languages', () => {
+  it('draws the Chinese reading with the agent name in parentheses', () => {
+    expect(bilingualModeOption('acceptEdits', 'Accept Edits', true)).toBe('接受编辑（Accept Edits）')
+    expect(bilingualModeOption('plan', 'Plan', true)).toBe('计划（Plan）')
+    expect(bilingualModeOption('fullAccess', 'Full Access', true)).toBe('完全权限（Full Access）')
+  })
+
+  it('keeps only the agent name on an English UI or an unknown id', () => {
+    expect(bilingualModeOption('acceptEdits', 'Accept Edits', false)).toBe('Accept Edits')
+    expect(bilingualModeOption('newMode', 'New Mode', true)).toBe('New Mode')
+  })
+
+  it('does not repeat a name the agent already localized', () => {
+    expect(bilingualModeOption('plan', '计划', true)).toBe('计划')
   })
 })
 

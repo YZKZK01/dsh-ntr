@@ -80,9 +80,10 @@ NTR 底座（`conversation.input.model`，`AcpSessionControls`）**只作首轮�
 
 ## 4. agent mode 控件
 
-注册在 `conversation.input.left`（`src/client/composer-mode.tsx`），调用 agent 自己的 `session/set_mode`。控件是**原生样式的 chip + 弹层菜单**（不再是 `<select>`）：chip 显示当前模式名，点开列出 agent 发布的**全部**模式（codebuddy 7 档：Always Ask / Accept Edits / Plan / Auto / Don't Ask / Bypass Permissions / Full Access），当前项带勾，agent 自带的 `description` 作为副行。
+注册在 `conversation.input.left`（`src/client/composer-mode.tsx`），调用 agent 自己的 `session/set_mode`。控件是**原生样式的 chip + 弹层菜单**（不再是 `<select>`）：chip 显示当前模式名，点开列出 agent 发布的**全部**模式（codebuddy 7 档：Always Ask / Accept Edits / Plan / Auto / Don't Ask / Bypass Permissions / Full Access），当前项带勾；行文案中英双语（`接受编辑（Accept Edits）`），agent 的 description **只做 `title` 悬停提示、不进可见行**（用户决策：菜单不是说明书）。
 
 - **不写说明性 caption**（保留旧决策的意图：agent 自己的 mode 名自解释），但 chip 必须显示模式名——它还要承载「待批准退出」这一状态；完整解释留在 `title` / `aria-label`（可访问性不能删）。中文界面优先 `mode-labels.ts` 的译名，未知 id 回落 agent 名（不发明模式）。
+- **agent 发布的其它标签同样双语**：高级选项与思考等级的名称/描述走 `src/client/config-labels.ts`（`沙箱（Sandbox）`、`命令在沙箱内运行…`），与权限卡同一「保留 agent 原文 + 补中文」契约；未知标签原样显示。
 - **选项不依赖活会话**：先取活会话的 `modes`，没有时回落 `agent/catalog` 的 `mode`（探测来的 `category: 'mode'` select，与 `session/new` 同源）。
 - **显示的值就是首轮要跑的值**：没有 pick 时它优先显示 `AcpAgentDef.defaultMode`（设置页「高级」的新对话默认），没有才回落 `catalog.mode.currentValue`（那可能是同一 agent 别的会话抬上来的）；released 行的 parked mode 低于这个默认（下次 resume 会应用它），live 行仍是权威。`displayedChatDefaults` / `seedChatChoiceFromCatalog` 必须在 `session/new` 前捕获并把它写成会话的 pick（与 model / effort 同一契约，见 [state.md §3](./state.md)），否则就是「下拉写着 Bypass、首轮跑 Always Ask」。
 - **控件是否出现由「agent 发布了什么轴」决定，不能由「用户点过什么」决定**。`describeRoute` 让 `modelLabel` 只在有 pick 时才有值是真实回归：只点过思考等级的会话整块模型 chip 消失。配套：`agentCatalog` 必须同时回 `currentModel` 与 `mode`。

@@ -14,6 +14,7 @@
  * records the answer under that model.
  */
 import type { AcpChatInjected, AcpMenuItem, AcpMenuSection } from './acp-ui.tsx'
+import { bilingualDetail, bilingualLabel } from './config-labels.ts'
 
 /**
  * The fetch row's id. Safe as a sentinel because the card renders it ONLY while
@@ -48,7 +49,7 @@ export function thoughtChip(route: ThoughtRoute, acp: AcpChatInjected['acp']): {
     }
   }
   return {
-    label: `${acp.label('思考', 'think')} · ${route.effortLabel ?? acp.label('默认', 'default')}`,
+    label: `${acp.label('思考', 'think')} · ${route.effortLabel === undefined ? acp.label('默认', 'default') : bilingualLabel(route.effortLabel)}`,
     title: acp.label('思考等级（agent 的 thought_level）', "Thought level (the agent's thought_level)"),
   }
 }
@@ -99,8 +100,8 @@ export function thoughtSection(
   for (const level of route.efforts) {
     items.push({
       id: level.id,
-      label: level.name,
-      ...level.description === undefined ? {} : { detail: level.description },
+      label: bilingualLabel(level.name),
+      ...level.description === undefined ? {} : { detail: bilingualDetail(level.description) },
       active: level.id === route.effectiveEffort,
     })
   }
